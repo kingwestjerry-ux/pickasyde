@@ -193,22 +193,21 @@ export async function executeSideSwitch({ voteId, debateId, previousSide, newSid
 }
 
 /**
- * Check if the current user has already used their one side switch for a debate.
- * Returns true if they have.
+ * Get how many times the current user has switched sides in a debate.
+ * Returns a count (0, 1, or 2). Max 2 switches allowed.
  */
 export async function hasUserSwitched(debateId) {
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return false;
+  if (!user) return 0;
 
   const { data, error } = await supabase
     .from('side_switch_events')
     .select('id')
     .eq('debate_id', debateId)
-    .eq('user_id', user.id)
-    .maybeSingle();
+    .eq('user_id', user.id);
 
-  if (error) { console.error('hasUserSwitched error:', error); return false; }
-  return !!data;
+  if (error) { console.error('hasUserSwitched error:', error); return 0; }
+  return data?.length ?? 0;
 }
 
 /**
@@ -338,6 +337,25 @@ export async function upvoteComment(commentId) {
     throw error;
   }
   return data;
+}
+
+/**
+ * Remove an upvote from a comment. The DB trigger will decrement comments.upvote_count.
+ */
+export async function removeUpvote(commentId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { error } = await supabase
+    .from('upvotes')
+    .delete()
+    .eq('comment_id', commentId)
+    .eq('user_id', user.id);
+
+  if (error) {
+    console.error('removeUpvote error:', error);
+    throw error;
+  }
 }
 
 /**
@@ -506,6 +524,72 @@ export async function updateComment(commentId, newText) {
 export async function deleteComment(commentId) {
   const { error } = await supabase.from('comments').delete().eq('id', commentId);
   if (error) { console.error('deleteComment error:', error); throw error; }
+}
+
+// ─── Admin / Backoffice ───────────────────────────────────────────────────────
+
+/**
+ * Fetch all debates ordered by date desc (admin use — includes future ones).
+ */
+export async function getAllDebatesAdmin() {
+  const { data, error } = await supabase
+    .from('debates')
+    .select('*')
+    .order('date', { ascending: false });
+  if (error) { console.error('getAllDebatesAdmin error:', error); throw error; }
+  return data ?? [];
+}
+
+/**
+ * Create a new debate question.
+ */
+export async function createDebate({ question, date, label_a, label_b, sponsor_name, sponsor_tagline, sponsor_logo_letter, sponsor_color }) {
+  const { data, error } = await supabase
+    .from('debates')
+    .insert({ question, date, label_a, label_b, sponsor_name, sponsor_tagline, sponsor_logo_letter, sponsor_color, is_closed: false })
+    .select()
+    .single();
+  if (error) { console.error('createDebate error:', error); throw error; }
+  return data;
+}
+
+/**
+ * Update an existing debate (question text, labels, sponsor, etc.).
+ */
+export async function updateDebate(id, fields) {
+  const { data, error } = await supabase
+    .from('debates')
+    .update(fields)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) { console.error('updateDebate error:', error); throw error; }
+  return data;
+}
+
+/**
+ * Delete a debate (admin only).
+ */
+export async function deleteDebate(id) {
+  const { error } = await supabase.from('debates').delete().eq('id', id);
+  if (error) { console.error('deleteDebate error:', error); throw error; }
+}
+
+/**
+ * Fetch recent comments across all debates for moderation.
+ */
+export async function getRecentCommentsAdmin(limit = 50) {
+  const { data, error } = await supabase
+    .from('comments')
+    .select(`
+      id, debate_id, user_id, side, text, upvote_count, created_at, comment_status,
+      user_profiles ( display_name, is_ai_seed ),
+      debates ( question, date )
+    `)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) { console.error('getRecentCommentsAdmin error:', error); throw error; }
+  return data ?? [];
 }
 
 // ─── AI Seed (admin only) ─────────────────────────────────────────────────────

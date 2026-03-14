@@ -2,13 +2,25 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from './lib/supabase.js';
 import {
   getTodayDebate, getArchive, getUserVote, getVoteCounts, castVote, changeVote,
-  getCommentsWithStatus, postComment, updateComment, deleteComment, upvoteComment, getUserUpvotes,
+  getCommentsWithStatus, postComment, updateComment, deleteComment, upvoteComment, removeUpvote, getUserUpvotes,
   getUserProfile, isAdmin, seedAIComment, getAIPersonas,
   subscribeToComments, subscribeToUpvotes,
   executeSideSwitch, hasUserSwitched, logPersuasionSignal,
+  getAllDebatesAdmin, createDebate, updateDebate, deleteDebate, getRecentCommentsAdmin,
 } from './lib/api.js';
 import { moderateComment, generateAIComment } from './lib/moderation.js';
 import { generateShareText, getXShareUrl } from './lib/share.js';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+/** Strip HTML tags and decode basic entities to prevent XSS / injection in comments */
+function stripHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
+    .replace(/javascript:/gi, '').replace(/on\w+=/gi, '');
+}
 
 // ─── Sponsors ─────────────────────────────────────────────────────────────────
 const SPONSORS = [
@@ -292,7 +304,7 @@ function VoteBar({ pctA, lA, lB, animate = true }) {
 }
 
 // ─── CommentCard ──────────────────────────────────────────────────────────────
-function CommentCard({ c, currentUserId, hasUpvoted, onUpvote, locked, onEdit, onDelete, userVote, canSwitchSides, onChangedMyMind }) {
+function CommentCard({ c, currentUserId, hasUpvoted, onUpvote, onRemoveUpvote, locked, onEdit, onDelete, userVote, canSwitchSides, onChangedMyMind }) {
   const [editing, setEditing]       = useState(false);
   const [editText, setEditText]     = useState(c.text);
   const [saving, setSaving]         = useState(false);
@@ -367,17 +379,24 @@ function CommentCard({ c, currentUserId, hasUpvoted, onUpvote, locked, onEdit, o
             </div>
           ) : (
             <>
-              <p style={{ margin:'0 0 8px', fontSize:14, color: isHistorical ? '#7070a0' : '#a8a8c8', lineHeight:1.6, fontStyle: isHistorical ? 'italic' : 'normal' }}>{c.text}</p>
+              <p style={{ margin:'0 0 8px', fontSize:14, color: isHistorical ? '#7070a0' : '#a8a8c8', lineHeight:1.6, fontStyle: isHistorical ? 'italic' : 'normal' }}>{stripHtml(c.text)}</p>
               <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
                 {!locked && !isHistorical && (
-                  <button onClick={()=>!isOwn&&!hasUpvoted&&onUpvote(c.id)} style={{ display:'inline-flex', alignItems:'center', gap:4, background:hasUpvoted?'rgba(79,196,184,.15)':'rgba(255,255,255,.04)', border:`1px solid ${hasUpvoted?'#4fc4b8':'#1e1e38'}`, borderRadius:5, padding:'2px 9px', cursor:isOwn||hasUpvoted?'default':'pointer', fontSize:12, color:hasUpvoted?'#4fc4b8':'#3e3e58', fontWeight:600 }}>
-                    ▲ {c.upvote_count}
+                  <button
+                    onClick={()=>{
+                      if(isOwn) return;
+                      if(hasUpvoted) onRemoveUpvote(c.id);
+                      else onUpvote(c.id);
+                    }}
+                    title={hasUpvoted?'Remove upvote':'Upvote'}
+                    style={{ display:'inline-flex', alignItems:'center', gap:4, background:hasUpvoted?'rgba(79,196,184,.15)':'rgba(255,255,255,.04)', border:`1px solid ${hasUpvoted?'#4fc4b8':'#1e1e38'}`, borderRadius:5, padding:'2px 9px', cursor:isOwn?'default':'pointer', fontSize:12, color:hasUpvoted?'#4fc4b8':'#3e3e58', fontWeight:600, transition:'all 0.15s' }}>
+                    {hasUpvoted ? '▲' : '△'} {c.upvote_count}
                   </button>
                 )}
                 {(locked || isHistorical) && <span style={{ fontSize:12, color:'#2e2e48' }}>▲ {c.upvote_count}</span>}
                 {showChangedMyMind && (
-                  <button onClick={()=>onChangedMyMind(c)} style={{ display:'inline-flex', alignItems:'center', gap:5, background:'rgba(247,201,72,0.07)', border:'1px solid rgba(247,201,72,0.25)', borderRadius:6, padding:'3px 10px', fontSize:11, fontWeight:800, color:'#f7c948', cursor:'pointer', letterSpacing:0.3 }}>
-                    🔄 This changed my mind
+                  <button onClick={()=>onChangedMyMind(c)} style={{ marginLeft:'auto', display:'inline-flex', alignItems:'center', gap:6, background:'linear-gradient(135deg,rgba(247,201,72,0.12),rgba(232,99,90,0.07))', border:'1px solid rgba(247,201,72,0.35)', borderRadius:20, padding:'5px 14px', fontSize:12, fontWeight:900, color:'#f7c948', cursor:'pointer', letterSpacing:0.4, boxShadow:'0 2px 10px rgba(247,201,72,0.12)', flexShrink:0, transition:'all 0.15s' }}>
+                    🤯 Okay, they got me
                   </button>
                 )}
               </div>
@@ -593,11 +612,198 @@ function ShareModal({ debate, vote, commentText, pct, streak, onClose }) {
   );
 }
 
+// ─── Backoffice Screen ────────────────────────────────────────────────────────
+function BackofficeScreen() {
+  const [tab, setTab]           = useState('questions');
+  const [debates, setDebates]   = useState([]);
+  const [allComments, setAllComments] = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  // New debate form
+  const [newQ, setNewQ]         = useState('');
+  const [newDate, setNewDate]   = useState('');
+  const [newLabelA, setNewLabelA] = useState('');
+  const [newLabelB, setNewLabelB] = useState('');
+  // Edit debate
+  const [editId, setEditId]     = useState(null);
+  const [editFields, setEditFields] = useState({});
+
+  const inp = { width:'100%', padding:'9px 12px', background:'#0a0a1a', border:'1px solid #1e1e38', borderRadius:8, color:'#d0d0e8', fontSize:14, marginBottom:8, boxSizing:'border-box', outline:'none', fontFamily:'inherit' };
+
+  useEffect(()=>{ loadData(); },[tab]);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      if(tab==='questions') {
+        const data = await getAllDebatesAdmin();
+        setDebates(data);
+      } else {
+        const data = await getRecentCommentsAdmin(80);
+        setAllComments(data);
+      }
+    } catch(err){ console.error(err); }
+    finally{ setLoading(false); }
+  }
+
+  async function handleCreate() {
+    if(!newQ.trim()||!newDate||!newLabelA.trim()||!newLabelB.trim()) { alert('Fill in all fields'); return; }
+    setSubmitting(true);
+    try {
+      await createDebate({ question:newQ.trim(), date:newDate, label_a:newLabelA.trim(), label_b:newLabelB.trim() });
+      setNewQ(''); setNewDate(''); setNewLabelA(''); setNewLabelB('');
+      loadData();
+    } catch(err){ alert('Error: '+err.message); }
+    finally{ setSubmitting(false); }
+  }
+
+  async function handleDeleteDebateRow(id) {
+    if(!window.confirm('Delete this debate and all its votes/comments? This cannot be undone.')) return;
+    try { await deleteDebate(id); loadData(); }
+    catch(err){ alert('Error: '+err.message); }
+  }
+
+  async function handleSaveEdit(id) {
+    try {
+      await updateDebate(id, editFields);
+      setEditId(null); setEditFields({});
+      loadData();
+    } catch(err){ alert('Error: '+err.message); }
+  }
+
+  async function handleDeleteCommentRow(id) {
+    try {
+      await deleteComment(id);
+      setAllComments(prev=>prev.filter(c=>c.id!==id));
+    } catch(err){ alert('Error: '+err.message); }
+  }
+
+  const today = new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+
+  return (
+    <div style={{ maxWidth:680, margin:'0 auto', padding:'16px 14px 80px' }}>
+      {/* Header */}
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:20 }}>
+        <div style={{ fontSize:20 }}>🛠️</div>
+        <div>
+          <div style={{ fontWeight:900, fontSize:18, color:'#d0d0e8' }}>Backoffice</div>
+          <div style={{ fontSize:11, color:'#33334a' }}>Admin only — manage debates &amp; comments</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display:'flex', gap:6, marginBottom:20, borderBottom:'1px solid #1a1a30', paddingBottom:12 }}>
+        {[['questions','📅 Questions'],['comments','💬 Comments']].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} style={{ padding:'6px 16px', background:tab===k?'#1a1a35':'transparent', border:`1px solid ${tab===k?'#2a2a55':'#1a1a30'}`, borderRadius:20, color:tab===k?'#d0d0e8':'#33334a', fontWeight:tab===k?800:500, fontSize:13, cursor:'pointer' }}>{l}</button>
+        ))}
+      </div>
+
+      {/* ── Questions Tab ── */}
+      {tab==='questions' && (
+        <div>
+          {/* Add new debate form */}
+          <div style={{ background:'#0e0e22', border:'1px solid #191930', borderRadius:14, padding:18, marginBottom:20 }}>
+            <div style={{ fontWeight:800, fontSize:14, color:'#8888c8', marginBottom:14 }}>➕ Schedule a Debate</div>
+            <input style={inp} placeholder="Debate question (e.g. Remote work or office?)" value={newQ} onChange={e=>setNewQ(e.target.value)}/>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:8 }}>
+              <input style={{...inp,marginBottom:0}} type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}/>
+              <input style={{...inp,marginBottom:0}} placeholder="Side A label" value={newLabelA} onChange={e=>setNewLabelA(e.target.value)}/>
+              <input style={{...inp,marginBottom:0}} placeholder="Side B label" value={newLabelB} onChange={e=>setNewLabelB(e.target.value)}/>
+            </div>
+            <button onClick={handleCreate} disabled={submitting} style={{ marginTop:8, padding:'9px 20px', background:'linear-gradient(135deg,#4fc4b8,#38a89d)', border:'none', borderRadius:9, color:'#0a0a1a', fontWeight:900, fontSize:13, cursor:submitting?'default':'pointer', opacity:submitting?0.7:1 }}>
+              {submitting?'Saving…':'Add to Queue'}
+            </button>
+          </div>
+
+          {/* Debate list */}
+          {loading ? <div style={{ color:'#33334a', textAlign:'center', padding:32 }}>Loading…</div> : debates.map(d=>{
+            const isPast   = d.date < today;
+            const isToday  = d.date === today;
+            const isFuture = d.date > today;
+            const statusColor = d.is_closed?'#e8635a55':isToday?'#4fc4b8':isFuture?'#f7c948':'#33334a';
+            const statusLabel = d.is_closed?'🔒 Closed':isToday?'🔴 Live':isFuture?'📅 Upcoming':'⌛ Past';
+            return (
+              <div key={d.id} style={{ background:'#0e0e22', border:'1px solid #191930', borderRadius:12, padding:'12px 14px', marginBottom:8 }}>
+                {editId===d.id ? (
+                  <div>
+                    <input style={inp} value={editFields.question??d.question} onChange={e=>setEditFields(f=>({...f,question:e.target.value}))} placeholder="Question"/>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+                      <input style={{...inp,marginBottom:0}} type="date" value={editFields.date??d.date} onChange={e=>setEditFields(f=>({...f,date:e.target.value}))}/>
+                      <input style={{...inp,marginBottom:0}} placeholder="Side A" value={editFields.label_a??d.label_a} onChange={e=>setEditFields(f=>({...f,label_a:e.target.value}))}/>
+                      <input style={{...inp,marginBottom:0}} placeholder="Side B" value={editFields.label_b??d.label_b} onChange={e=>setEditFields(f=>({...f,label_b:e.target.value}))}/>
+                    </div>
+                    <div style={{ display:'flex', gap:7, marginTop:10 }}>
+                      <button onClick={()=>handleSaveEdit(d.id)} style={{ padding:'6px 14px', background:'linear-gradient(135deg,#4fc4b8,#38a89d)', border:'none', borderRadius:7, color:'#0a0a1a', fontWeight:800, fontSize:12, cursor:'pointer' }}>Save</button>
+                      <button onClick={()=>{setEditId(null);setEditFields({});}} style={{ padding:'6px 12px', background:'transparent', border:'1px solid #1e1e38', borderRadius:7, color:'#3a3a58', fontSize:12, cursor:'pointer' }}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:10, marginBottom:6 }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                          <span style={{ fontSize:10, fontWeight:800, color:statusColor, letterSpacing:0.5 }}>{statusLabel}</span>
+                          <span style={{ fontSize:10, color:'#33334a' }}>{d.date}</span>
+                        </div>
+                        <div style={{ fontSize:14, fontWeight:700, color:'#d0d0e8', lineHeight:1.35 }}>{d.question}</div>
+                        <div style={{ fontSize:11, color:'#33334a', marginTop:4 }}>
+                          <span style={{ color:'#4fc4b8' }}>{d.label_a}</span> vs <span style={{ color:'#e8635a' }}>{d.label_b}</span>
+                        </div>
+                      </div>
+                      <div style={{ display:'flex', gap:5, flexShrink:0 }}>
+                        {!d.is_closed && <button onClick={()=>{setEditId(d.id);setEditFields({});}} style={{ padding:'4px 10px', background:'rgba(255,255,255,.04)', border:'1px solid #1e1e38', borderRadius:6, color:'#6060aa', fontSize:11, cursor:'pointer' }}>✏️</button>}
+                        {(isFuture||!d.is_closed) && <button onClick={()=>handleDeleteDebateRow(d.id)} style={{ padding:'4px 10px', background:'rgba(232,99,90,.06)', border:'1px solid #e8635a22', borderRadius:6, color:'#e8635a', fontSize:11, cursor:'pointer' }}>🗑️</button>}
+                      </div>
+                    </div>
+                    {d.final_pct_a!=null && <div style={{ fontSize:11, color:'#33334a' }}>Final: {d.final_pct_a}% {d.label_a}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Comments Tab ── */}
+      {tab==='comments' && (
+        <div>
+          <div style={{ fontSize:11, color:'#33334a', marginBottom:14 }}>Showing the 80 most recent comments across all debates.</div>
+          {loading ? <div style={{ color:'#33334a', textAlign:'center', padding:32 }}>Loading…</div> : allComments.map(c=>(
+            <div key={c.id} style={{ background:'#0e0e22', border:'1px solid #191930', borderLeft:`3px solid ${c.side==='A'?'#4fc4b844':'#e8635a44'}`, borderRadius:'0 10px 10px 0', padding:'10px 14px', marginBottom:7 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:10, color:'#33334a', marginBottom:4 }}>
+                    <span style={{ color:c.side==='A'?'#4fc4b8':'#e8635a', fontWeight:700 }}>{c.side==='A'?(c.debates?.label_a??'A'):(c.debates?.label_b??'B')}</span>
+                    {' · '}{c.user_profiles?.display_name||'user'}
+                    {c.user_profiles?.is_ai_seed&&<span style={{ marginLeft:5, fontSize:9, color:'#5050a0', fontWeight:800 }}>AI</span>}
+                    {' · '}{c.debates?.question?.slice(0,40)+'…'}
+                    {' · '}{c.debates?.date}
+                  </div>
+                  <div style={{ fontSize:13, color:'#a8a8c8', lineHeight:1.5 }}>{c.text}</div>
+                  {c.comment_status==='historical'&&<div style={{ fontSize:10, color:'#5858a8', marginTop:4 }}>⌛ historical</div>}
+                </div>
+                <button onClick={()=>handleDeleteCommentRow(c.id)} style={{ flexShrink:0, padding:'4px 9px', background:'rgba(232,99,90,.06)', border:'1px solid #e8635a22', borderRadius:6, color:'#e8635a', fontSize:11, cursor:'pointer' }}>🗑️</button>
+              </div>
+            </div>
+          ))}
+          {!loading&&allComments.length===0&&<div style={{ color:'#33334a', textAlign:'center', padding:32 }}>No comments found.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Bottom Nav ───────────────────────────────────────────────────────────────
-function BottomNav({ screen, onToday, onArchive, onShare }) {
+function BottomNav({ screen, onToday, onArchive, onShare, onBackoffice, isAdmin }) {
+  const tabs = [
+    ['🏠','Today','today',onToday],
+    ['📅','Archive','archive',onArchive],
+    ['📤','Share','share',onShare],
+  ];
+  if(isAdmin) tabs.push(['🛠️','Admin','backoffice',onBackoffice]);
   return (
     <div style={{ position:'fixed', bottom:0, left:0, right:0, background:'rgba(8,8,20,0.97)', borderTop:'1px solid #1a1a33', backdropFilter:'blur(12px)', padding:'10px 0 16px', display:'flex', justifyContent:'space-around', zIndex:50 }}>
-      {[['🏠','Today','today',onToday],['📅','Archive','archive',onArchive],['📤','Share','share',onShare]].map(([ic,lab,key,fn])=>(
+      {tabs.map(([ic,lab,key,fn])=>(
         <button key={lab} onClick={fn} style={{ background:'none', border:'none', display:'flex', flexDirection:'column', alignItems:'center', gap:3, cursor:'pointer', color:screen===key?'#4fc4b8':'#33334a', fontSize:20, transition:'color 0.15s, transform 0.15s', transform:screen===key?'scale(1.1)':'scale(1)' }}>
           <span>{ic}</span>
           <span style={{ fontSize:10, fontWeight:700, letterSpacing:0.5 }}>{lab}</span>
@@ -721,8 +927,8 @@ export default function App() {
   const [shareNudge, setShareNudge]     = useState(false);
   const [voteFlash, setVoteFlash]       = useState(null);
   const [sponsorIdx, setSponsorIdx]     = useState(0);
-  // Side switch state
-  const [hasSwitched, setHasSwitched]   = useState(false);
+  // Side switch state (max 2 switches per debate)
+  const [switchCount, setSwitchCount]   = useState(0);
   const [switchTarget, setSwitchTarget] = useState(null); // { comment } — the comment that triggered switch
   const [switchModal, setSwitchModal]   = useState(false);
   const [switching, setSwitching]       = useState(false);
@@ -753,7 +959,7 @@ export default function App() {
         setVoteCounts(counts);
         setComments(addSideLabels(comms,today));
         setUserUpvotes(upvs);
-        setHasSwitched(!!switched);
+        setSwitchCount(switched||0);
         if(commentChannelRef.current) commentChannelRef.current.unsubscribe();
         commentChannelRef.current = subscribeToComments(today.id, nc=>{
           setComments(prev=>prev.find(c=>c.id===nc.id)?prev:[addSideLabel(nc,today),...prev]);
@@ -831,7 +1037,7 @@ export default function App() {
 
   // Called when user taps "This changed my mind" on an opposite-side comment
   async function handleChangedMyMind(comment) {
-    if(!debate||!userVote||hasSwitched||isLocked) return;
+    if(!debate||!userVote||switchCount>=2||isLocked) return;
     // Log the signal immediately (analytics — every tap captured)
     await logPersuasionSignal(debate.id, comment.id).catch(console.error);
     setSwitchTarget(comment);
@@ -855,15 +1061,15 @@ export default function App() {
       });
       // Update local state
       setUserVoteMap(m=>({...m,[debate.id]:voteRow}));
-      setHasSwitched(true);
+      setSwitchCount(c=>c+1);
       // Mark the user's old comment as historical in local state
       setComments(prev=>prev.map(c=>c.user_id===authUser.id&&c.side===previousSide&&c.comment_status==='active' ? {...c,comment_status:'historical'} : c));
       // Update vote counts
       getVoteCounts(debate.id).then(setVoteCounts).catch(console.error);
       // Close modal, clear target
       setSwitchModal(false); setSwitchTarget(null);
-      // Prompt for new side comment
-      setCommentText('');
+      // Prompt for new side comment — pre-fill with the reason they just typed (reduces double-entry friction)
+      setCommentText(reasonText||'');
       setModState(null);
       setShowBox(true);
       setShowNewSidePrompt(true);
@@ -880,6 +1086,14 @@ export default function App() {
     catch(err){ setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:c.upvote_count-1}:c)); setUserUpvotes(s=>{const n=new Set(s);n.delete(commentId);return n;}); }
   }
 
+  async function handleRemoveUpvote(commentId) {
+    if(!authUser||isLocked) return;
+    setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:Math.max(0,c.upvote_count-1)}:c));
+    setUserUpvotes(s=>{const n=new Set(s);n.delete(commentId);return n;});
+    try { await removeUpvote(commentId); }
+    catch(err){ setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:c.upvote_count+1}:c)); setUserUpvotes(s=>new Set([...s,commentId])); }
+  }
+
   async function handleEdit(commentId, newText) {
     const updated = await updateComment(commentId, newText);
     setComments(prev=>prev.map(c=>c.id===commentId?{...c,text:updated.text}:c));
@@ -887,7 +1101,6 @@ export default function App() {
   async function handleDelete(commentId) {
     await deleteComment(commentId);
     setComments(prev=>prev.filter(c=>c.id!==commentId));
-    setUserComment(prev=>prev?.id===commentId?null:prev);
   }
 
   async function handleAIGenerate(side) {
@@ -930,12 +1143,12 @@ export default function App() {
           {/* Header */}
           <div style={{ background:'rgba(9,9,22,0.97)', borderBottom:'1px solid #1a1a33', padding:'12px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', position:'sticky', top:0, zIndex:50, backdropFilter:'blur(12px)' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              {screen==='archived-detail' && <button onClick={()=>setScreen('archive')} style={{ background:'none',border:'none',color:'#4fc4b8',cursor:'pointer',fontSize:18,padding:0 }}>←</button>}
+              {(screen==='archived-detail'||screen==='backoffice') && <button onClick={()=>setScreen(screen==='archived-detail'?'archive':'today')} style={{ background:'none',border:'none',color:'#4fc4b8',cursor:'pointer',fontSize:18,padding:0 }}>←</button>}
               <PickASydeLogo size="small"/>
               {streak>=2 && <span style={{ fontSize:11,fontWeight:800,color:'#f7c948',background:'rgba(247,201,72,.1)',border:'1px solid #f7c94828',borderRadius:6,padding:'2px 8px' }}>{streak}🔥</span>}
             </div>
             <div style={{ display:'flex', gap:7, alignItems:'center' }}>
-              {screen==='archived-detail' && <button onClick={goToToday} style={{ background:'rgba(255,255,255,.04)',border:'1px solid #1e1e3a',borderRadius:7,padding:'4px 10px',fontSize:11,fontWeight:700,color:'#55557a',cursor:'pointer' }}>Today</button>}
+              {(screen==='archived-detail'||screen==='backoffice') && <button onClick={goToToday} style={{ background:'rgba(255,255,255,.04)',border:'1px solid #1e1e3a',borderRadius:7,padding:'4px 10px',fontSize:11,fontWeight:700,color:'#55557a',cursor:'pointer' }}>Today</button>}
               <div style={{ position:'relative' }}>
                 <button onClick={()=>setShowProfileMenu(v=>!v)} title="Account" style={{ background:'none',border:'none',cursor:'pointer',padding:0 }}>
                   <Av uid={authUser.id} name={userProfile?.display_name||authUser.email} size={30}/>
@@ -957,6 +1170,9 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* ── Backoffice (admin only) ── */}
+          {screen==='backoffice' && adminUser && <BackofficeScreen/>}
 
           {/* ── Archive list ── */}
           {screen==='archive' && (
@@ -987,7 +1203,7 @@ export default function App() {
           )}
 
           {/* ── Today / Archived-detail ── */}
-          {screen!=='archive' && (
+          {screen!=='archive' && screen!=='backoffice' && (
             <div style={{ maxWidth:680, margin:'0 auto', padding:'0 16px 60px', width:'100%' }}>
 
               {debateLoading && screen==='today' && <div style={{ padding:48, textAlign:'center', color:'#33334a', fontSize:14 }}>Loading today's debate…</div>}
@@ -1061,7 +1277,7 @@ export default function App() {
                       <div style={{ marginTop:16, display:'flex', alignItems:'center', gap:9, flexWrap:'wrap' }}>
                         <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:userVote==='A'?'rgba(79,196,184,.12)':'rgba(232,99,90,.12)', border:`1px solid ${userVote==='A'?'#4fc4b844':'#e8635a44'}`, borderRadius:10, padding:'7px 13px', fontSize:13, color:userVote==='A'?'#4fc4b8':'#e8635a', fontWeight:700 }}>
                           ✓ {userVote==='A'?debate.label_a:debate.label_b}
-                          {!hasSwitched && <span onClick={()=>{setShowVoteButtons(true);setShowBox(false);setModState(null);}} style={{ color:'#7070b0', cursor:'pointer', fontSize:11, borderLeft:'1px solid #3a3a58', paddingLeft:8, marginLeft:3, fontWeight:600 }}>change</span>}
+                          {switchCount<2 && <span onClick={()=>{setShowVoteButtons(true);setShowBox(false);setModState(null);}} style={{ color:'#7070b0', cursor:'pointer', fontSize:11, borderLeft:'1px solid #3a3a58', paddingLeft:8, marginLeft:3, fontWeight:600 }}>change</span>}
                         </div>
                         <button onClick={()=>setShowShare(true)} style={{ background:'rgba(247,201,72,.08)', border:'1px solid #f7c94830', borderRadius:10, padding:'7px 13px', fontSize:12, fontWeight:700, color:'#f7c948', cursor:'pointer' }}>📤 Share</button>
                         {!showBox && !userComment && <button onClick={()=>setShowBox(true)} style={{ fontSize:12, color:'#33334a', background:'none', border:'1px solid #1a1a30', borderRadius:9, padding:'6px 12px', cursor:'pointer' }}>+ comment</button>}
@@ -1092,7 +1308,7 @@ export default function App() {
                         Why did you choose <span style={{ color:userVote==='A'?'#4fc4b8':'#e8635a', fontWeight:700 }}>{userVote==='A'?debate.label_a:debate.label_b}</span>? <span style={{ color:'#252540' }}>(optional — &gt;5 upvotes boosts your side ⚡)</span>
                       </p>
                     )}
-                    <textarea ref={textRef} placeholder={showNewSidePrompt ? `Make the case for ${userVote==='A'?debate.label_a:debate.label_b}…` : `Why ${userVote==='A'?debate.label_a:debate.label_b}? Make your case…`} value={commentText} onChange={e=>{setCommentText(e.target.value.slice(0,280));if(modState?.status==='blocked')setModState(null);}} rows={3}
+                    <textarea ref={textRef} placeholder={showNewSidePrompt ? `Make the case for ${userVote==='A'?debate.label_a:debate.label_b}…` : `Why ${userVote==='A'?debate.label_a:debate.label_b}? Make your case…`} value={commentText} onChange={e=>{setCommentText(stripHtml(e.target.value).slice(0,280));if(modState?.status==='blocked')setModState(null);}} rows={3}
                       style={{ width:'100%', background:'#0a0a1a', border:'1px solid #1a1a30', borderRadius:9, color:'#d0d0e8', fontSize:16, padding:'11px 13px', resize:'none', boxSizing:'border-box', outline:'none', fontFamily:'inherit', lineHeight:1.55 }}/>
                     <div style={{ textAlign:'right', fontSize:11, color:'#2e2e48', marginTop:3 }}>{commentText.length}/280</div>
                     {modState && (
@@ -1136,13 +1352,13 @@ export default function App() {
                 {/* Comments */}
                 {visible.length===0
                   ? <p style={{ textAlign:'center', color:'#252540', padding:36, fontSize:13 }}>No comments yet. {isLocked?'Debate is closed.':'Pick a side and start the conversation.'}</p>
-                  : visible.map(c=><CommentCard key={c.id} c={c} currentUserId={authUser.id} hasUpvoted={userUpvotes.has(c.id)} onUpvote={handleUpvote} locked={isLocked} onEdit={handleEdit} onDelete={handleDelete} userVote={userVote} canSwitchSides={!!userVote&&!hasSwitched&&!isLocked} onChangedMyMind={handleChangedMyMind}/>)
+                  : visible.map(c=><CommentCard key={c.id} c={c} currentUserId={authUser.id} hasUpvoted={userUpvotes.has(c.id)} onUpvote={handleUpvote} onRemoveUpvote={handleRemoveUpvote} locked={isLocked} onEdit={handleEdit} onDelete={handleDelete} userVote={userVote} canSwitchSides={!!userVote&&switchCount<2&&!isLocked} onChangedMyMind={handleChangedMyMind}/>)
                 }
               </>)}
             </div>
           )}
 
-          <BottomNav screen={screen} onToday={goToToday} onArchive={loadArchive} onShare={()=>{
+          <BottomNav screen={screen} onToday={goToToday} onArchive={loadArchive} isAdmin={!!adminUser} onBackoffice={()=>setScreen('backoffice')} onShare={()=>{
             if(!userVote){ setShareNudge(true); setTimeout(()=>setShareNudge(false),2800); }
             else setShowShare(true);
           }}/>

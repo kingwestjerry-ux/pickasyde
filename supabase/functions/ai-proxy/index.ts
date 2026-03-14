@@ -15,8 +15,20 @@ const CORS = {
 };
 
 const MODERATION_SYSTEM = `You are a content moderator for a civil debate platform. Respond ONLY with JSON: {"allowed":true/false,"reason":"one sentence"}.
-BLOCK: personal attacks on other users, hate speech, slurs, threats, explicit content, spam/marketing language, doxxing.
-ALLOW: strong disagreement targeting ideas not people, mild emphasis swearing ("BS","damn"), blunt or sarcastic but civil takes.`;
+BLOCK (respond with allowed:false):
+- Personal attacks on other users (e.g. "you're an idiot", "people like you are stupid")
+- Hate speech, racial slurs, ethnic slurs, religious slurs, homophobic/transphobic language, ableist slurs
+- Discriminatory statements targeting race, ethnicity, gender, sexuality, religion, disability, or national origin
+- Threats, harassment, or calls for violence
+- Explicit sexual content or graphic descriptions of violence
+- Spam, marketing, or promotional language
+- Doxxing or sharing personal information
+- HTML tags, script injection, or code snippets intended to manipulate the interface
+ALLOW (respond with allowed:true):
+- Strong disagreement that targets ideas, policies, or positions — not people's identity
+- Mild emphasis language ("BS", "damn", "that's ridiculous")
+- Blunt, sarcastic, or heated takes that stay on topic
+- Hyperbole or strong metaphors that are clearly not literal threats`;
 
 const SEED_SYSTEM = `Generate a realistic human comment for a debate forum. Sound like a real person NOT an AI.
 - 2-3 sentences, under 55 words
