@@ -1,4 +1,4 @@
-# ⚔️ VERSUS — Setup Guide
+# ⚔️ Pick-A-Syde— Setup Guide
 
 > One question. Two sides. You decide.
 
@@ -19,7 +19,7 @@ npm run dev            # http://localhost:5173
 ## Step 1 — Create a Supabase project
 
 1. Go to [supabase.com](https://supabase.com) and create a free account.
-2. Click **New project**. Name it `versus`. Choose the region closest to your users.
+2. Click **New project**. Name it `pickasyde`. Choose the region closest to your users.
 3. Wait ~2 minutes for the project to spin up.
 4. Go to **Settings → API** and copy:
    - **Project URL** → `VITE_SUPABASE_URL`
@@ -67,7 +67,7 @@ Edit `.env`:
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJ...
 VITE_ANTHROPIC_API_KEY=sk-ant-...
-VITE_APP_URL=https://versus.app
+VITE_APP_URL=https://pickasyde.app
 ```
 
 Get your Anthropic API key from [console.anthropic.com](https://console.anthropic.com).
@@ -136,7 +136,7 @@ Your app is live. The build command is `npm run build`, output directory is `dis
 
 ## Step 7 — Add debate questions
 
-Versus is content-driven. New debates must be scheduled in advance.
+pickasyde is content-driven. New debates must be scheduled in advance.
 
 1. Go to Supabase **Table Editor → debates**.
 2. Click **Insert row**.
@@ -171,10 +171,10 @@ The seed buttons pre-populate new debates with realistic AI-generated comments s
 In `src/lib/api.js`, find this line and update it:
 
 ```js
-const ADMIN_EMAILS = ['admin@versus.app'];
+const ADMIN_EMAILS = ['admin@pickasyde.app'];
 ```
 
-Change `admin@versus.app` to your actual sign-in email. The seed buttons are only visible when the logged-in user's email matches this list.
+Change `admin@pickasyde.app` to your actual sign-in email. The seed buttons are only visible when the logged-in user's email matches this list.
 
 ### Set up AI persona accounts
 
