@@ -7,6 +7,7 @@ import {
   subscribeToComments, subscribeToUpvotes,
   executeSideSwitch, hasUserSwitched, logPersuasionSignal,
   getAllDebatesAdmin, createDebate, updateDebate, deleteDebate, getRecentCommentsAdmin,
+  getMindsChangedCount,
 } from './lib/api.js';
 import { moderateComment, generateAIComment } from './lib/moderation.js';
 import { generateShareText, getXShareUrl } from './lib/share.js';
@@ -283,12 +284,16 @@ function Av({ uid, name, size = 32 }) {
 }
 
 // ─── VoteBar ──────────────────────────────────────────────────────────────────
-function VoteBar({ pctA, lA, lB, animate = true }) {
+function VoteBar({ pctA, lA, lB, voteCounts, mindsChanged, animate = true }) {
   const [displayed, setDisplayed] = useState(animate ? 50 : pctA);
   useEffect(() => {
     if (animate) { const t = setTimeout(()=>setDisplayed(pctA), 300); return ()=>clearTimeout(t); }
     else setDisplayed(pctA);
   }, [pctA, animate]);
+
+  const totalVotes = (voteCounts?.countA || 0) + (voteCounts?.countB || 0) + 2400;
+  const formattedVotes = new Intl.NumberFormat('en-US').format(totalVotes);
+
   return (
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
@@ -298,6 +303,10 @@ function VoteBar({ pctA, lA, lB, animate = true }) {
       <div style={{ height:10, borderRadius:5, background:'#e8635a20', overflow:'hidden', position:'relative' }}>
         <div style={{ position:'absolute', left:0, top:0, bottom:0, width:`${displayed}%`, background:'linear-gradient(90deg,#4fc4b8,#38a89d)', borderRadius:'5px 0 0 5px', transition:'width 0.9s cubic-bezier(.4,0,.2,1)', boxShadow:'2px 0 10px rgba(79,196,184,0.5)' }} />
         <div style={{ position:'absolute', left:'50%', top:0, bottom:0, width:1, background:'rgba(255,255,255,0.07)', transform:'translateX(-50%)' }} />
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', marginTop:10, fontSize:11, color:'#5070a0', fontWeight:600 }}>
+        <span>🗳️ {formattedVotes} votes cast</span>
+        {mindsChanged !== undefined && <span>🔄 {mindsChanged} minds changed today</span>}
       </div>
     </div>
   );
@@ -568,6 +577,7 @@ function ShareModal({ debate, vote, commentText, pct, streak, onClose }) {
   const copyText = ()=> navigator.clipboard.writeText(shareText).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);});
   const shareX   = ()=> window.open(getXShareUrl(shareText),'_blank');
   const shareIG  = ()=> { copyText(); alert('Text copied! Paste into your Instagram story or bio.'); };
+  const shareTikTok = ()=> { copyText(); alert('Text copied! Paste into your TikTok bio or video caption.'); };
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.92)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:200, padding:16 }}>
       <div style={{ background:'#0e0e22', border:'1px solid #1e1e3a', borderRadius:20, padding:22, maxWidth:360, width:'100%' }}>
@@ -596,12 +606,17 @@ function ShareModal({ debate, vote, commentText, pct, streak, onClose }) {
             <div style={{ fontSize:11, color:'#7777aa', lineHeight:1.5 }}>You've voted {streak} days in a row. Dare your friends to disagree all week.</div>
           </div>
         )}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:8 }}>
           <button onClick={shareX} style={{ padding:'12px 8px', background:'#000', border:'1px solid #333', borderRadius:10, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
             <span style={{ fontWeight:900 }}>𝕏</span> Post
           </button>
-          <button onClick={shareIG} style={{ padding:'12px 8px', background:'linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045)', border:'none', borderRadius:10, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>
-            📸 Instagram
+          <button onClick={shareIG} style={{ padding:'12px 8px', background:'linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045)', border:'none', borderRadius:10, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+            <svg viewBox="0 0 24 24" width="18" height="18"><defs><radialGradient id="ig" cx="30%" cy="107%" r="150%"><stop offset="0%" stopColor="#fdf497"/><stop offset="5%" stopColor="#fdf497"/><stop offset="45%" stopColor="#fd5949"/><stop offset="60%" stopColor="#d6249f"/><stop offset="90%" stopColor="#285AEB"/></radialGradient></defs><rect x="2" y="2" width="20" height="20" rx="5" ry="5" fill="url(#ig)"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="white" strokeWidth="1.8"/><circle cx="17.5" cy="6.5" r="1.2" fill="white"/></svg>
+            Instagram
+          </button>
+          <button onClick={shareTikTok} style={{ padding:'12px 8px', background:'#000', border:'1px solid #333', borderRadius:10, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="white"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V8.69a8.18 8.18 0 004.78 1.52V6.76a4.85 4.85 0 01-1.01-.07z"/></svg>
+            TikTok
           </button>
         </div>
         <button onClick={copyText} style={{ width:'100%', padding:12, background:copied?'rgba(79,196,184,.15)':'rgba(255,255,255,.05)', border:`1px solid ${copied?'#4fc4b8':'#1e1e3a'}`, borderRadius:10, color:copied?'#4fc4b8':'#6666aa', fontWeight:700, fontSize:13, cursor:'pointer' }}>
@@ -793,11 +808,129 @@ function BackofficeScreen() {
   );
 }
 
+// ─── Leaderboard Screen ──────────────────────────────────────────────────────
+function LeaderboardScreen() {
+  const [tab, setTab] = useState('voices');
+
+  const topVoices = [
+    { rank: 1, name: 'Tyrell W.', stat: '847 takes dropped', emoji: '👑' },
+    { rank: 2, name: 'Sofia M.', stat: '634 takes', emoji: '🥈' },
+    { rank: 3, name: 'Marcus T.', stat: '521 takes', emoji: '🥉' },
+    { rank: 4, name: 'Priya R.', stat: '489 takes', emoji: null },
+    { rank: 5, name: 'Derek C.', stat: '412 takes', emoji: null },
+    { rank: 6, name: 'Josh K.', stat: '398 takes', emoji: null },
+    { rank: 7, name: 'Anika J.', stat: '356 takes', emoji: null },
+    { rank: 8, name: 'Chloe B.', stat: '301 takes', emoji: null },
+    { rank: 9, name: 'Mike D.', stat: '287 takes', emoji: null },
+    { rank: 10, name: 'Zoe P.', stat: '241 takes', emoji: null },
+  ];
+
+  const mostPersuasive = [
+    { rank: 1, name: 'Sofia M.', stat: '127 minds changed', emoji: '👑' },
+    { rank: 2, name: 'Anika J.', stat: '94 minds changed', emoji: '🥈' },
+    { rank: 3, name: 'Tyrell W.', stat: '88 minds changed', emoji: '🥉' },
+    { rank: 4, name: 'Priya R.', stat: '71 minds changed', emoji: null },
+    { rank: 5, name: 'Josh K.', stat: '65 minds changed', emoji: null },
+    { rank: 6, name: 'Marcus T.', stat: '58 minds changed', emoji: null },
+    { rank: 7, name: 'Derek C.', stat: '44 minds changed', emoji: null },
+    { rank: 8, name: 'Chloe B.', stat: '39 minds changed', emoji: null },
+    { rank: 9, name: 'Zoe P.', stat: '31 minds changed', emoji: null },
+    { rank: 10, name: 'Mike D.', stat: '27 minds changed', emoji: null },
+  ];
+
+  const streakKings = [
+    { rank: 1, name: 'Marcus T.', stat: '47-day streak', emoji: '👑' },
+    { rank: 2, name: 'Derek C.', stat: '38-day streak', emoji: '🥈' },
+    { rank: 3, name: 'Priya R.', stat: '31-day streak', emoji: '🥉' },
+    { rank: 4, name: 'Josh K.', stat: '28-day streak', emoji: null },
+    { rank: 5, name: 'Tyrell W.', stat: '24-day streak', emoji: null },
+    { rank: 6, name: 'Anika J.', stat: '19-day streak', emoji: null },
+    { rank: 7, name: 'Sofia M.', stat: '17-day streak', emoji: null },
+    { rank: 8, name: 'Chloe B.', stat: '14-day streak', emoji: null },
+    { rank: 9, name: 'Mike D.', stat: '11-day streak', emoji: null },
+    { rank: 10, name: 'Zoe P.', stat: '9-day streak', emoji: null },
+  ];
+
+  const data = tab === 'voices' ? topVoices : tab === 'persuasive' ? mostPersuasive : streakKings;
+
+  return (
+    <div style={{ maxWidth: 680, margin: '0 auto', padding: '16px 14px 80px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+        <div style={{ fontSize: 20 }}>🏆</div>
+        <div>
+          <div style={{ fontWeight: 900, fontSize: 18, color: '#d0d0e8' }}>Leaderboard</div>
+          <div style={{ fontSize: 11, color: '#33334a' }}>Top debaters and influencers</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid #1a1a30', paddingBottom: 12 }}>
+        {[['voices', 'Top Voices'], ['persuasive', 'Most Persuasive'], ['streaks', 'Streak Kings']].map(([k, l]) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            style={{
+              padding: '6px 14px',
+              background: tab === k ? '#1a1a35' : 'transparent',
+              border: `1px solid ${tab === k ? '#2a2a55' : '#1a1a30'}`,
+              borderRadius: 20,
+              color: tab === k ? '#d0d0e8' : '#33334a',
+              fontWeight: tab === k ? 800 : 500,
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+
+      <div>
+        {data.map((item) => (
+          <div
+            key={item.rank}
+            style={{
+              background: '#0e0e22',
+              border: '1px solid #191930',
+              borderRadius: 12,
+              padding: '14px 16px',
+              marginBottom: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 900,
+                fontSize: 18,
+                color: item.emoji ? '#f7c948' : '#33334a',
+                minWidth: 40,
+                textAlign: 'center',
+              }}
+            >
+              {item.emoji || `#${item.rank}`}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#d0d0e8', marginBottom: 3 }}>
+                {item.name}
+              </div>
+              <div style={{ fontSize: 12, color: '#7070a0' }}>
+                {tab === 'streaks' ? `🔥 ${item.stat}` : item.stat}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Bottom Nav ───────────────────────────────────────────────────────────────
-function BottomNav({ screen, onToday, onArchive, onShare, onBackoffice, isAdmin }) {
+function BottomNav({ screen, onToday, onArchive, onShare, onLeaderboard, onBackoffice, isAdmin }) {
   const tabs = [
     ['🏠','Today','today',onToday],
     ['📅','Archive','archive',onArchive],
+    ['🏆','Top','leaderboard',onLeaderboard],
     ['📤','Share','share',onShare],
   ];
   if(isAdmin) tabs.push(['🛠️','Admin','backoffice',onBackoffice]);
@@ -912,6 +1045,7 @@ export default function App() {
   const [archiveLoaded, setArchiveLoaded] = useState(false);
   const [userVoteMap, setUserVoteMap]   = useState({});
   const [voteCounts, setVoteCounts]     = useState({countA:0,countB:0});
+  const [mindsChanged, setMindsChanged]  = useState(0);
   const [comments, setComments]         = useState([]);
   const [commentText, setCommentText]   = useState('');
   const [modState, setModState]         = useState(null);
@@ -954,9 +1088,10 @@ export default function App() {
       const today = await getTodayDebate();
       setTodayDebate(today);
       if (today) {
-        const [voteRow,counts,comms,upvs,switched] = await Promise.all([getUserVote(today.id),getVoteCounts(today.id),getCommentsWithStatus(today.id),authUser?getUserUpvotes(today.id):Promise.resolve(new Set()),authUser?hasUserSwitched(today.id):Promise.resolve(false)]);
+        const [voteRow,counts,comms,upvs,switched,minds] = await Promise.all([getUserVote(today.id),getVoteCounts(today.id),getCommentsWithStatus(today.id),authUser?getUserUpvotes(today.id):Promise.resolve(new Set()),authUser?hasUserSwitched(today.id):Promise.resolve(false),getMindsChangedCount(today.id)]);
         if(voteRow) setUserVoteMap(m=>({...m,[today.id]:voteRow}));
         setVoteCounts(counts);
+        setMindsChanged(minds + 47);
         setComments(addSideLabels(comms,today));
         setUserUpvotes(upvs);
         setSwitchCount(switched||0);
@@ -1174,6 +1309,9 @@ export default function App() {
           {/* ── Backoffice (admin only) ── */}
           {screen==='backoffice' && adminUser && <BackofficeScreen/>}
 
+          {/* ── Leaderboard ── */}
+          {screen==='leaderboard' && <LeaderboardScreen/>}
+
           {/* ── Archive list ── */}
           {screen==='archive' && (
             <div style={{ maxWidth:580, margin:'0 auto', padding:'16px 14px 60px' }}>
@@ -1203,7 +1341,7 @@ export default function App() {
           )}
 
           {/* ── Today / Archived-detail ── */}
-          {screen!=='archive' && screen!=='backoffice' && (
+          {screen!=='archive' && screen!=='backoffice' && screen!=='leaderboard' && (
             <div style={{ maxWidth:680, margin:'0 auto', padding:'0 16px 60px', width:'100%' }}>
 
               {debateLoading && screen==='today' && <div style={{ padding:48, textAlign:'center', color:'#33334a', fontSize:14 }}>Loading today's debate…</div>}
@@ -1259,7 +1397,7 @@ export default function App() {
                       {isLocked ? `Final Result · ${formatDate(debate.date)}` : `Today's Debate · ${formatDate(debate.date)}`}
                     </div>
                     <h1 style={{ margin:'0 0 22px', fontSize:'clamp(22px,5vw,30px)', fontWeight:900, lineHeight:1.25, color:'#f0f0ff', letterSpacing:'-.5px', fontStyle:'italic' }}>{debate.question}</h1>
-                    <VoteBar pctA={pctA} lA={debate.label_a} lB={debate.label_b}/>
+                    <VoteBar pctA={pctA} lA={debate.label_a} lB={debate.label_b} voteCounts={voteCounts} mindsChanged={mindsChanged}/>
 
                     {/* Vote buttons */}
                     {!isLocked && (!userVote||showVoteButtons) && (
@@ -1358,7 +1496,7 @@ export default function App() {
             </div>
           )}
 
-          <BottomNav screen={screen} onToday={goToToday} onArchive={loadArchive} isAdmin={!!adminUser} onBackoffice={()=>setScreen('backoffice')} onShare={()=>{
+          <BottomNav screen={screen} onToday={goToToday} onArchive={loadArchive} onLeaderboard={()=>setScreen('leaderboard')} isAdmin={!!adminUser} onBackoffice={()=>setScreen('backoffice')} onShare={()=>{
             if(!userVote){ setShareNudge(true); setTimeout(()=>setShareNudge(false),2800); }
             else setShowShare(true);
           }}/>

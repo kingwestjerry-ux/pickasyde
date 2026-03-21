@@ -642,3 +642,20 @@ export async function getAIPersonas() {
   }
   return data ?? [];
 }
+
+/**
+ * Get the count of minds changed (side_switch_events) for a debate.
+ * Returns the count of actual switch events.
+ */
+export async function getMindsChangedCount(debateId) {
+  const { data, error } = await supabase
+    .from('side_switch_events')
+    .select('id')
+    .eq('debate_id', debateId);
+
+  if (error) {
+    console.error('getMindsChangedCount error:', error);
+    return 0;
+  }
+  return data?.length ?? 0;
+}
