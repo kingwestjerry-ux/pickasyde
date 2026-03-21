@@ -39,13 +39,17 @@ export async function getTodayDebate() {
 }
 
 /**
- * Fetch all closed debates, newest first (for the Archive screen).
+ * Fetch all past debates (date before today) or explicitly closed ones,
+ * newest first (for the Archive screen).
+ * A debate belongs in the archive if its date has already passed OR it's
+ * been manually marked closed — whichever comes first.
  */
 export async function getArchive() {
+  const today = getTodayEST();
   const { data, error } = await supabase
     .from('debates')
     .select('*')
-    .eq('is_closed', true)
+    .or(`is_closed.eq.true,date.lt.${today}`)
     .order('date', { ascending: false });
 
   if (error) {
@@ -53,6 +57,26 @@ export async function getArchive() {
     throw error;
   }
   return data ?? [];
+}
+
+/**
+ * Fetch the next upcoming debate (date > today), for the "come back tomorrow" teaser.
+ */
+export async function getUpcomingDebate() {
+  const today = getTodayEST();
+  const { data, error } = await supabase
+    .from('debates')
+    .select('id, question, label_a, label_b, date')
+    .gt('date', today)
+    .order('date', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('getUpcomingDebate error:', error);
+    return null;
+  }
+  return data ?? null;
 }
 
 // ─── Votes ────────────────────────────────────────────────────────────────────

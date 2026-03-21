@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from './lib/supabase.js';
 import {
-  getTodayDebate, getArchive, getUserVote, getVoteCounts, castVote, changeVote,
+  getTodayDebate, getArchive, getUpcomingDebate, getUserVote, getVoteCounts, castVote, changeVote,
   getCommentsWithStatus, postComment, updateComment, deleteComment, upvoteComment, removeUpvote, getUserUpvotes,
   getUserProfile, isAdmin, seedAIComment, getAIPersonas,
   subscribeToComments, subscribeToUpvotes,
@@ -925,6 +925,42 @@ function LeaderboardScreen() {
   );
 }
 
+// ─── Closing Countdown ────────────────────────────────────────────────────────
+// Shows "Debate closes in X hours Y min" to create urgency before midnight EST.
+function ClosingCountdown() {
+  const [timeLeft, setTimeLeft] = useState('');
+
+  useEffect(() => {
+    function compute() {
+      const now = new Date();
+      // Midnight EST
+      const estMidnight = new Date(now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }));
+      estMidnight.setDate(estMidnight.getDate() + 1); // next calendar day
+      // Convert EST midnight to UTC
+      const estOffset = -5 * 60; // EST = UTC-5 (approximate; ignores DST edge case)
+      const utcMidnight = new Date(estMidnight.getTime() - estOffset * 60000);
+      const diff = utcMidnight - now;
+      if (diff <= 0) { setTimeLeft(''); return; }
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      if (h >= 12) { setTimeLeft(''); return; } // only show when <12h left
+      setTimeLeft(h > 0 ? `${h}h ${m}m` : `${m}m`);
+    }
+    compute();
+    const t = setInterval(compute, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (!timeLeft) return null;
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:7, padding:'8px 12px', background:'rgba(232,99,90,0.06)', border:'1px solid #e8635a22', borderRadius:9, marginBottom:14, fontSize:12 }}>
+      <span style={{ fontSize:15 }}>⏰</span>
+      <span style={{ color:'#e8635a', fontWeight:700 }}>Closes in {timeLeft}</span>
+      <span style={{ color:'#3a3a58' }}>· Pick your side before this debate locks!</span>
+    </div>
+  );
+}
+
 // ─── Bottom Nav ───────────────────────────────────────────────────────────────
 function BottomNav({ screen, onToday, onArchive, onShare, onLeaderboard, onBackoffice, isAdmin }) {
   const tabs = [
@@ -1057,6 +1093,8 @@ export default function App() {
   const [userUpvotes, setUserUpvotes]   = useState(new Set());
   const [aiLoading, setAiLoading]       = useState(null);
   const [aiPersonas, setAiPersonas]     = useState([]);
+  const [upcomingDebate, setUpcomingDebate] = useState(null);
+  const [streakMilestone, setStreakMilestone] = useState(null); // shown once on milestone days
   const [showShare, setShowShare]       = useState(false);
   const [shareNudge, setShareNudge]     = useState(false);
   const [voteFlash, setVoteFlash]       = useState(null);
@@ -1106,6 +1144,9 @@ export default function App() {
       }
       const arch = await getArchive();
       if(arch.length>0) setYesterdayDebate(arch[0]);
+      // Load tomorrow's teaser
+      const upcoming = await getUpcomingDebate();
+      setUpcomingDebate(upcoming);
     } catch(err){ console.error('loadTodayDebate error:',err); }
     finally { setDebateLoading(false); }
   }
@@ -1149,7 +1190,16 @@ export default function App() {
     setTimeout(()=>textRef.current?.focus(),2800); // focus after flash animation
     try {
       const row = userVoteRow ? await changeVote(userVoteRow.id,side) : await castVote(debate.id,side);
-      if(!userVoteRow) getUserProfile().then(p=>setUserProfile(p)).catch(console.error);
+      if(!userVoteRow) {
+        getUserProfile().then(p=>{
+          setUserProfile(p);
+          // Check for streak milestones after first-vote profile refresh
+          const newStreak = p?.current_streak ?? 0;
+          if([2,3,7,14,30,60,100].includes(newStreak)) {
+            setStreakMilestone(newStreak);
+          }
+        }).catch(console.error);
+      }
       setUserVoteMap(m=>({...m,[debate.id]:row}));
       getVoteCounts(debate.id).then(setVoteCounts).catch(console.error);
     } catch(err){console.error('handleVote error:',err);setUserVoteMap(m=>({...m,[debate.id]:userVoteRow??null}));}
@@ -1464,6 +1514,23 @@ export default function App() {
                   </div>
                 )}
 
+                {/* ── Retention: "closes in X hours" urgency — shown when user hasn't voted ── */}
+                {!isLocked && !userVote && screen==='today' && <ClosingCountdown/>}
+
+                {/* ── Retention: tomorrow's debate teaser — shown after voting ── */}
+                {!isLocked && userVote && screen==='today' && upcomingDebate && (
+                  <div style={{ background:'linear-gradient(135deg,rgba(79,196,184,0.06),rgba(79,196,184,0.02))', border:'1px solid #4fc4b820', borderRadius:12, padding:'13px 16px', marginBottom:14 }}>
+                    <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'#4fc4b8', marginBottom:6, textTransform:'uppercase' }}>🔮 Coming Tomorrow · {formatDate(upcomingDebate.date)}</div>
+                    <div style={{ fontSize:14, fontWeight:700, color:'#a0a0cc', lineHeight:1.35, marginBottom:8 }}>{upcomingDebate.question}</div>
+                    <div style={{ fontSize:11, color:'#33334a' }}>
+                      <span style={{ color:'#4fc4b8', fontWeight:700 }}>{upcomingDebate.label_a}</span>
+                      {' vs '}
+                      <span style={{ color:'#e8635a', fontWeight:700 }}>{upcomingDebate.label_b}</span>
+                      {' · Debate drops at 9:30 AM EST'}
+                    </div>
+                  </div>
+                )}
+
                 {/* AI seed — admin only */}
                 {!isLocked && adminUser && (
                   <div style={{ display:'flex', gap:7, marginBottom:14 }}>
@@ -1520,6 +1587,27 @@ export default function App() {
       )}
       {/* Share modal */}
       {showShare && debate && userVote && <ShareModal debate={debate} vote={userVote} commentText={userComment?.text??null} pct={userVote==='A'?pctA:100-pctA} streak={streak} onClose={()=>setShowShare(false)}/>}
+
+      {/* Streak milestone celebration */}
+      {streakMilestone && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:20 }} onClick={()=>setStreakMilestone(null)}>
+          <div style={{ background:'#0e0e22', border:'1px solid #2a2a44', borderRadius:20, padding:'36px 28px', maxWidth:340, width:'100%', textAlign:'center', position:'relative' }} onClick={e=>e.stopPropagation()}>
+            <div style={{ fontSize:56, marginBottom:8 }}>{streakMilestone>=30?'🏆':streakMilestone>=7?'🔥':'⚡'}</div>
+            <div style={{ fontSize:28, fontWeight:900, color:'#f7c948', marginBottom:6, letterSpacing:-0.5 }}>{streakMilestone}-Day Streak!</div>
+            <div style={{ fontSize:14, color:'#7070a0', lineHeight:1.6, marginBottom:24 }}>
+              {streakMilestone>=30 ? "You're a PickASyde legend. 30 days straight — that's dedication." :
+               streakMilestone>=7  ? `A full week of hot takes. Your streak is ${streakMilestone} days strong.` :
+                                     `${streakMilestone} days in a row. You're on a roll — keep it going!`}
+            </div>
+            <button onClick={()=>{setStreakMilestone(null);setShowShare(true);}} style={{ width:'100%', padding:'13px 0', background:'linear-gradient(135deg,#f7c948,#e8b830)', border:'none', borderRadius:11, color:'#0a0a1a', fontWeight:900, fontSize:14, cursor:'pointer', marginBottom:10 }}>
+              📤 Share Your Streak
+            </button>
+            <button onClick={()=>setStreakMilestone(null)} style={{ width:'100%', padding:'11px 0', background:'transparent', border:'1px solid #1e1e38', borderRadius:11, color:'#4a4a6a', fontSize:13, cursor:'pointer' }}>
+              Keep it going →
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Side switch confirmation modal */}
       {switchModal && debate && userVote && (
