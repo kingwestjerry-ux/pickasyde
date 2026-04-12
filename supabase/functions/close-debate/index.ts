@@ -76,15 +76,16 @@ Deno.serve(async (_req: Request) => {
     return new Response(JSON.stringify({ error: commentErr.message }), { status: 500 });
   }
 
-  const countA = (votes ?? []).filter(v => v.side === 'A').length;
-  const countB = (votes ?? []).filter(v => v.side === 'B').length;
+  const countA = (votes ?? []).filter(v => v.side === 'A').length;  const countB = (votes ?? []).filter(v => v.side === 'B').length;
 
   const boostA = (comments ?? []).filter(c => c.side === 'A' && c.upvote_count >= 5).length * 0.5;
   const boostB = (comments ?? []).filter(c => c.side === 'B' && c.upvote_count >= 5).length * 0.5;
 
   const totalA = countA + (debate.base_seed_a ?? 45) + boostA;
   const totalB = countB + (debate.base_seed_b ?? 45) + boostB;
-  const finalPctA = Math.round((totalA / (totalA + totalB)) * 100);
+  let finalPctA = Math.round((totalA / (totalA + totalB)) * 100)
+    // Never allow a 50/50 tie — there must always be a winner.
+    if (finalPctA === 50) { finalPctA = totalA >= totalB ? 51 : 49; }
 
   console.log(`Closing debate ${debate.id}: A=${totalA}, B=${totalB}, final_pct_a=${finalPctA}`);
 
