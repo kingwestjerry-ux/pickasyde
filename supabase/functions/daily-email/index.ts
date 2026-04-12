@@ -99,12 +99,26 @@ function buildEmailHtml(debate: { question: string; label_a: string; label_b: st
             </td>
           </tr>
 
-          <!-- Footer -->
+          <!-- Add-to-contacts nudge -->
+                    <tr>
+                                <td style="padding:14px 32px 0;">
+                                              <div style="background:#0d0d22;border:1px solid #1e1e3a;border-radius:10px;padding:14px 16px;text-align:center;">
+                                                              <div style="font-size:12px;color:#4a4a7a;font-weight:700;margin-bottom:4px;">📬 Never miss a debate</div>
+                                                                              <div style="font-size:11px;color:#2a2a50;line-height:1.7;">
+                                                                                                Add <strong style="color:#4fc4b8;">debates@pickasyde.com</strong> to your contacts<br/>
+                                                                                                                  so we always land in your inbox — not your junk folder.
+                                                                                                                                  </div>
+                                                                                                                                                </div>
+                                                                                                                                                            </td>
+                                                                                                                                                                      </tr>
+                                                                                                                                                                      
+                                                                                                                                                                      <!-- Footer -->
           <tr>
             <td style="padding:20px 32px;border-top:1px solid #12122a;text-align:center;">
               <div style="font-size:11px;color:#2a2a44;line-height:1.8;">
-                You're receiving this because you signed up at <a href="https://www.pickasyde.com" style="color:#4a4a7a;text-decoration:none;">pickasyde.com</a><br/>
-                <a href="https://www.pickasyde.com" style="color:#2a2a44;text-decoration:underline;">Unsubscribe</a>
+                                You're receiving this because you signed up at <a href="https://www.pickasyde.com" style="color:#4a4a7a;text-decoration:none;">pickasyde.com</a><br/>
+                                                To unsubscribe: open the app → tap your avatar → turn off Daily emails.<br/>
+                                                                Or reply with "unsubscribe" and we'll take care of it.
               </div>
             </td>
           </tr>
