@@ -1,1626 +1,1025 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './lib/supabase.js';
-import {
-  getTodayDebate, getArchive, getUpcomingDebate, getUserVote, getVoteCounts, castVote, changeVote,
-  getCommentsWithStatus, postComment, updateComment, deleteComment, upvoteComment, removeUpvote, getUserUpvotes,
-  getUserProfile, isAdmin, seedAIComment, getAIPersonas,
-  subscribeToComments, subscribeToUpvotes,
-  executeSideSwitch, hasUserSwitched, logPersuasionSignal,
-  getAllDebatesAdmin, createDebate, updateDebate, deleteDebate, getRecentCommentsAdmin,
-  getMindsChangedCount,
-} from './lib/api.js';
-import { moderateComment, generateAIComment } from './lib/moderation.js';
-import { generateShareText, getXShareUrl } from './lib/share.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-/** Strip HTML tags and decode basic entities to prevent XSS / injection in comments */
-function stripHtml(str) {
-  if (!str) return '';
-  return str
-    .replace(/<[^>]*>/g, '')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
-    .replace(/javascript:/gi, '').replace(/on\w+=/gi, '');
+/* ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+   PickASyde â FIFA World Cup 2026 Bracket Picker  v2.0
+ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+
+const TOURNAMENT_START = new Date('2026-06-11T14:00:00Z');
+const isLocked = () => new Date() >= TOURNAMENT_START;
+
+const FLAGS = {
+  'USA':'ðºð¸','Mexico':'ð²ð½','Canada':'ð¨ð¦','Argentina':'ð¦ð·','Brazil':'ð§ð·',
+  'Colombia':'ð¨ð´','Uruguay':'ðºð¾','Ecuador':'ðªð¨','Venezuela':'ð»ðª','Peru':'ðµðª',
+  'France':'ð«ð·','England':'ð´ó §ó ¢ó ¥ó ®ó §ó ¿','Germany':'ð©ðª','Spain':'ðªð¸','Portugal':'ðµð¹',
+  'Netherlands':'ð³ð±','Italy':'ð®ð¹','Belgium':'ð§ðª','Croatia':'ð­ð·','Denmark':'ð©ð°',
+  'Switzerland':'ð¨ð­','Austria':'ð¦ð¹','Serbia':'ð·ð¸','Poland':'ðµð±','Turkey':'ð¹ð·',
+  'Scotland':'ð´ó §ó ¢ó ³ó £ó ´ó ¿','Ukraine':'ðºð¦','Morocco':'ð²ð¦','Senegal':'ð¸ð³','Nigeria':'ð³ð¬',
+  'Egypt':'ðªð¬','Cameroon':'ð¨ð²','South Africa':'ð¿ð¦','Ivory Coast':'ð¨ð®',
+  'Algeria':'ð©ð¿','Ghana':'ð¬ð­','Japan':'ð¯ðµ','South Korea':'ð°ð·','Saudi Arabia':'ð¸ð¦',
+  'Iran':'ð®ð·','Australia':'ð¦ðº','Qatar':'ð¶ð¦','Iraq':'ð®ð¶','Uzbekistan':'ðºð¿',
+  'Honduras':'ð­ð³','Costa Rica':'ð¨ð·','Panama':'ðµð¦','New Zealand':'ð³ð¿',
+};
+const flag = t => FLAGS[t] || 'ð³';
+
+const WC_GROUPS = [
+  { id:'A', teams:['USA','Morocco','New Zealand'] },
+  { id:'B', teams:['Mexico','Poland','Algeria'] },
+  { id:'C', teams:['Canada','Senegal','Serbia'] },
+  { id:'D', teams:['Argentina','Iran','Australia'] },
+  { id:'E', teams:['France','Saudi Arabia','South Africa'] },
+  { id:'F', teams:['England','Japan','Venezuela'] },
+  { id:'G', teams:['Spain','South Korea','Costa Rica'] },
+  { id:'H', teams:['Brazil','Croatia','Ghana'] },
+  { id:'I', teams:['Germany','Colombia','Ukraine'] },
+  { id:'J', teams:['Portugal','Ecuador','Panama'] },
+  { id:'K', teams:['Netherlands','Ivory Coast','Qatar'] },
+  { id:'L', teams:['Italy','Egypt','Honduras'] },
+  { id:'M', teams:['Belgium','Uruguay','Iraq'] },
+  { id:'N', teams:['Denmark','Cameroon','Peru'] },
+  { id:'O', teams:['Switzerland','Nigeria','Uzbekistan'] },
+  { id:'P', teams:['Austria','Turkey','Scotland'] },
+];
+
+const R32 = [
+  ['r32_1','A1','B2'],['r32_2','B1','A2'],
+  ['r32_3','C1','D2'],['r32_4','D1','C2'],
+  ['r32_5','E1','F2'],['r32_6','F1','E2'],
+  ['r32_7','G1','H2'],['r32_8','H1','G2'],
+  ['r32_9','I1','J2'],['r32_10','J1','I2'],
+  ['r32_11','K1','L2'],['r32_12','L1','K2'],
+  ['r32_13','M1','N2'],['r32_14','N1','M2'],
+  ['r32_15','O1','P2'],['r32_16','P1','O2'],
+];
+const R16 = [
+  ['r16_1','r32_1','r32_2'],['r16_2','r32_3','r32_4'],
+  ['r16_3','r32_5','r32_6'],['r16_4','r32_7','r32_8'],
+  ['r16_5','r32_9','r32_10'],['r16_6','r32_11','r32_12'],
+  ['r16_7','r32_13','r32_14'],['r16_8','r32_15','r32_16'],
+];
+const QF = [
+  ['qf_1','r16_1','r16_2'],['qf_2','r16_3','r16_4'],
+  ['qf_3','r16_5','r16_6'],['qf_4','r16_7','r16_8'],
+];
+const SF = [['sf_1','qf_1','qf_2'],['sf_2','qf_3','qf_4']];
+
+const ROUND_LABELS = {r32:'Round of 32',r16:'Round of 16',qf:'Quarterfinals',sf:'Semifinals',final:'Final'};
+const POINTS = {group:5,r32:10,r16:20,qf:40,sf:80,final:160,exact_score:320};
+
+function resolveSlot(slot, gp={}, kp={}) {
+  if(!slot) return null;
+  if(/^[A-P][12]$/.test(slot)) {
+    const g=slot[0], rank=parseInt(slot[1])-1;
+    return gp[g]?.[rank]??null;
+  }
+  return kp[slot]??null;
 }
 
-// ─── Sponsors ─────────────────────────────────────────────────────────────────
-const SPONSORS = [
-  { name: 'Liquid Death',    tagline: 'Murder Your Thirst',         letter: 'L', color: '#1B3B5A', url: 'https://liquiddeath.com' },
-  { name: 'Death Wish Coffee', tagline: "World's Strongest Coffee", letter: 'D', color: '#2a0808', url: 'https://deathwishcoffee.com' },
-  { name: 'Brunt Workwear',  tagline: 'Work boots built for workers',letter: 'B', color: '#7a3a10', url: 'https://bruntworkwear.com' },
-  { name: 'Cometeer',        tagline: 'The future of coffee',        letter: 'C', color: '#003a5a', url: 'https://cometeer.com' },
-  { name: 'MSCHF',           tagline: 'Make something cool happen',  letter: 'M', color: '#aa0000', url: 'https://mschf.com' },
-  { name: 'Tabs Chocolate',  tagline: 'The 2-person experience',     letter: 'T', color: '#3d1a00', url: 'https://tabschocolate.com' },
-  { name: 'Lume Deodorant',  tagline: 'Whole body odor control',     letter: 'L', color: '#1a3a1a', url: 'https://lumedeodorant.com' },
-  { name: 'Cuts Clothing',   tagline: 'Premium performance clothing',letter: 'C', color: '#111122', url: 'https://cuts.co' },
-  { name: 'Topicals',        tagline: 'Skin that speaks for itself', letter: 'T', color: '#3a0a3a', url: 'https://thetopicals.com' },
-  { name: 'Jolie',           tagline: 'Filtered shower heads',       letter: 'J', color: '#0a2a3a', url: 'https://jolieskinco.com' },
-];
+function computePoints(entry, results={}) {
+  if(!entry) return 0;
+  const {groupPicks={},knockoutPicks={}}=entry;
+  let pts=0;
+  WC_GROUPS.forEach(({id})=>{
+    const r=results[`group_${id}`];
+    if(!r) return;
+    const adv=Array.isArray(r)?r:(r.split?.(',')??[]);
+    (groupPicks[id]||[]).forEach(t=>{if(adv.includes(t))pts+=POINTS.group;});
+  });
+  [...R32,...R16,...QF,...SF,[['final','sf_1','sf_2']]].forEach(p=>{
+    const [mid]=Array.isArray(p[0])?p[0]:p;
+    const roundKey=mid.replace(/_\d+$/,'');
+    const ptVal=POINTS[roundKey]??0;
+    const winner=results[mid];
+    if(!winner) return;
+    if(knockoutPicks[mid]===winner) pts+=ptVal;
+  });
+  if(results['final_score']&&entry.finalScore){
+    const {a:ra,b:rb}=results['final_score'];
+    if(entry.finalScore.a===ra&&entry.finalScore.b===rb) pts+=POINTS.exact_score;
+  }
+  return pts;
+}
 
-// ─── Sample questions ─────────────────────────────────────────────────────────
-const SAMPLE_QUESTIONS = [
-  'Coffee ☕ or Tea 🍵?',
-  'Morning person 🌅 or Night owl 🦉?',
-  'Work from home or the office?',
-  'Cats 🐱 or Dogs 🐶?',
-  'Instagram or TikTok?',
-  'Hot weather ☀️ or Cold weather ❄️?',
-  'Text or call?',
-  'Netflix 🎬 or Reading 📚?',
-  'City life 🌆 or Countryside 🌿?',
-  'Logic 🧠 or Intuition 💡?',
-  'Save money 💰 or Live for now?',
-  'Pineapple on pizza 🍕 yes or no?',
-  'Introvert 🪴 or Extrovert 🎊?',
-  'Quality or Quantity?',
-  'Early bird or sleep in?',
-  'Rules or Freedom?',
-  'Head ❄️ or Heart 🔥?',
-  'Planned or Spontaneous?',
-  'Android or iPhone?',
-  'Cook at home or eat out?',
-  'Sneakers or Boots?',
-  'Gym or Outdoors?',
-];
+/* ââ CSS âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+const CSS=`
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,700;0,9..40,900&display=swap');
+*,*::before,*::after{box-sizing:border-box;}
+body{margin:0;background:#050510;color:#eeeeff;font-family:'DM Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
+#root{min-height:100vh;}
+button,a{-webkit-tap-highlight-color:transparent;cursor:pointer;}
+html{scroll-behavior:smooth;}
+::-webkit-scrollbar{width:5px;height:5px;}
+::-webkit-scrollbar-thumb{background:#1e1e3a;border-radius:3px;}
 
-// ─── Global CSS ───────────────────────────────────────────────────────────────
-const GLOBAL_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,700;0,9..40,900;1,9..40,900&display=swap');
+.wc-app{min-height:100vh;background:#050510;background-image:
+  radial-gradient(ellipse 90% 55% at 50% -5%,rgba(0,212,130,0.08) 0%,transparent 65%),
+  radial-gradient(ellipse 60% 40% at 95% 60%,rgba(255,215,0,0.04) 0%,transparent 60%),
+  linear-gradient(160deg,#060614 0%,#080818 60%,#050510 100%);}
 
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #0a0a1a; }
+/* Header */
+.wc-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;
+  border-bottom:1px solid rgba(255,255,255,0.06);position:sticky;top:0;z-index:100;
+  background:rgba(5,5,16,0.94);backdrop-filter:blur(14px);}
+.wc-logo{font-size:1.3rem;font-weight:900;letter-spacing:-0.5px;background:linear-gradient(135deg,#00D4AA,#FFD700);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.wc-logo-sub{font-size:0.72rem;font-weight:500;-webkit-text-fill-color:#7788aa;display:block;margin-top:2px;letter-spacing:0.5px;}
+.wc-auth-btn{background:rgba(0,212,170,0.1);border:1px solid rgba(0,212,170,0.3);color:#00D4AA;
+  padding:7px 16px;border-radius:8px;font-size:0.82rem;font-weight:700;transition:all .2s;}
+.wc-auth-btn:hover{background:rgba(0,212,170,0.2);border-color:#00D4AA;}
+.wc-user-pill{display:flex;align-items:center;gap:8px;}
+.wc-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#00D4AA,#FFD700);
+  display:flex;align-items:center;justify-content:center;font-weight:900;font-size:0.75rem;color:#050510;}
 
-  /* ── Layout: single column ── */
-  .vs-layout {
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-    background: #070715;
-    background-image:
-      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(79,196,184,0.09) 0%, transparent 65%),
-      radial-gradient(ellipse 60% 40% at 100% 60%, rgba(232,99,90,0.06) 0%, transparent 60%),
-      radial-gradient(ellipse 50% 35% at 0% 80%, rgba(100,80,200,0.05) 0%, transparent 60%),
-      linear-gradient(160deg, #07071a 0%, #080818 50%, #070712 100%);
-  }
-  .vs-center { width: 100%; display: flex; flex-direction: column; }
-  /* Explainer panel below center */
-  .vs-explainer {
-    width: 100%;
-    max-width: 680px;
-    margin: 0 auto;
-    padding: 16px 16px 40px;
-    border-top: 1px solid #12122a;
-  }
+/* Nav */
+.wc-nav{display:flex;gap:2px;padding:10px 14px 0;border-bottom:1px solid rgba(255,255,255,0.06);overflow-x:auto;}
+.wc-nav::-webkit-scrollbar{display:none;}
+.wc-tab{padding:8px 18px;border-radius:8px 8px 0 0;font-size:0.84rem;font-weight:700;
+  border:none;background:transparent;color:#667788;transition:all .2s;white-space:nowrap;}
+.wc-tab.active{background:rgba(0,212,170,0.09);color:#00D4AA;border-bottom:2px solid #00D4AA;}
+.wc-tab:hover:not(.active){color:#cce;background:rgba(255,255,255,0.04);}
 
-  /* ── Logo animations ── */
-  .pas-logo { display: inline-flex; align-items: center; line-height: 1; white-space: nowrap; overflow: visible; padding: 4px 0; }
-  .pas-logo-wrap { overflow: visible !important; display: inline-block; padding: 2px 4px; }
-  @keyframes aPivot {
-    0%   { transform: rotate(-4deg); }
-    50%  { transform: rotate(4deg);  }
-    100% { transform: rotate(-4deg); }
-  }
-  .pas-a { animation: aPivot 2.4s ease-in-out infinite; transform-origin: bottom center; display: inline-block; }
-  @keyframes logoBreath {
-    0%, 100% { opacity: 0.92; }
-    50%       { opacity: 1; }
-  }
-  .pas-logo-wrap { animation: logoBreath 4s ease-in-out infinite; display: inline-block; overflow: visible; }
-  @keyframes diamondShine {
-    0%   { background-position: 200% center; }
-    100% { background-position: -200% center; }
-  }
-  .pas-a-diamond {
-    background: linear-gradient(105deg, #ffffff 0%, #c8f0ff 15%, #ffe8f8 28%, #ffffff 38%, #fff9c4 50%, #c8f0ff 62%, #f8c8ff 75%, #ffffff 85%, #c8f0ff 100%);
-    background-size: 200% auto;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: aPivot 2.4s ease-in-out infinite, diamondShine 3s linear infinite;
-    transform-origin: bottom center;
-    display: inline-block;
-    padding: 0 5px;
-    overflow: visible;
-    /* No filter here — it conflicts with background-clip:text in some browsers */
-  }
+/* Page */
+.wc-page{max-width:1200px;margin:0 auto;padding:24px 16px 80px;}
 
-  /* ── Vote flash ── */
-  .vf-overlay { animation: vfFade 2.6s ease-out forwards; }
-  @keyframes vfFade {
-    0%   { opacity:0; } 5% { opacity:1; } 70% { opacity:0.9; } 100% { opacity:0; }
-  }
-  .vf-bg { animation: vfFade 2.6s ease-out forwards; }
-  .vf-label { animation: vfLabel 2.6s cubic-bezier(.23,1,.32,1) forwards; }
-  @keyframes vfLabel {
-    0%   { transform: scale(5) skewX(-10deg); opacity:0; }
-    10%  { transform: scale(0.92) skewX(-5deg); opacity:1; }
-    25%  { transform: scale(1.04) skewX(-3deg); }
-    35%  { transform: scale(1) skewX(-4deg); }
-    75%  { transform: scale(1) skewX(-4deg); opacity:1; }
-    100% { transform: scale(1.08) skewX(-4deg); opacity:0; }
-  }
-  .vf-chosen { animation: vfChosen 2.6s cubic-bezier(.23,1,.32,1) forwards; }
-  @keyframes vfChosen {
-    0%   { transform: translateY(50px) scale(0.5); opacity:0; }
-    15%  { transform: translateY(-6px) scale(1.06); opacity:1; }
-    28%  { transform: translateY(3px) scale(0.98); }
-    38%  { transform: translateY(0) scale(1); }
-    75%  { transform: translateY(0) scale(1); opacity:1; }
-    100% { transform: translateY(-18px) scale(1); opacity:0; }
-  }
-  .vf-bolt { animation: vfBolt 1.9s ease-out forwards; }
-  @keyframes vfBolt {
-    0%   { transform: translate(-50%,-50%) scale(0) rotate(var(--r)); opacity:1; }
-    20%  { opacity:1; }
-    100% { transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(1.4) rotate(var(--r)); opacity:0; }
-  }
-  .vf-particle { animation: vfParticle 1.7s ease-out forwards; }
-  @keyframes vfParticle {
-    0%   { transform: translate(-50%,-50%); opacity:1; }
-    100% { transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))); opacity:0; }
-  }
-  .vf-ring { animation: vfRing 1.5s ease-out forwards; }
-  @keyframes vfRing {
-    0%   { transform: translate(-50%,-50%) scale(0); opacity:0.9; }
-    100% { transform: translate(-50%,-50%) scale(7); opacity:0; }
-  }
-  .vf-ring2 { animation: vfRing 2s 0.25s ease-out forwards; opacity:0; }
-  .vf-shake { animation: vfShake 0.4s ease-out; }
-  @keyframes vfShake {
-    0%,100% { transform:translate(0,0); }
-    10% { transform:translate(-5px,3px); } 20% { transform:translate(5px,-3px); }
-    30% { transform:translate(-4px,4px); } 40% { transform:translate(4px,-4px); }
-    50% { transform:translate(-2px,2px); } 60% { transform:translate(2px,-2px); }
-  }
+/* Hero */
+.wc-hero{text-align:center;padding:32px 16px 20px;}
+.wc-trophy{font-size:3rem;margin-bottom:8px;}
+.wc-hero-title{font-size:1.8rem;font-weight:900;background:linear-gradient(135deg,#00D4AA,#FFD700);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin:0 0 8px;}
+.wc-hero-sub{font-size:0.88rem;color:#7788aa;margin:0 auto;max-width:520px;line-height:1.6;}
+.wc-lock{margin:14px auto;max-width:560px;background:rgba(255,215,0,0.07);border:1px solid rgba(255,215,0,0.2);
+  border-radius:10px;padding:10px 16px;font-size:0.8rem;color:#c8aa44;text-align:center;}
 
-  /* ── Questions panel ── */
-  @keyframes aqFade { 0% { opacity:0; transform:translateY(12px); } 30% { opacity:1; transform:translateY(0); } }
+/* View toggle */
+.view-toggle{display:flex;gap:8px;justify-content:center;margin-bottom:24px;}
+.view-btn{padding:8px 20px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);
+  background:transparent;color:#667788;font-weight:700;font-size:0.84rem;transition:all .2s;}
+.view-btn.active{background:rgba(0,212,170,0.1);border-color:rgba(0,212,170,0.4);color:#00D4AA;}
+.view-btn:hover:not(.active){border-color:rgba(255,255,255,0.2);color:#cce;}
 
-  /* ── Sponsor ── */
-  @keyframes sponsorPulse {
-    0%,100% { box-shadow: 0 0 0 0 rgba(247,201,72,0); }
-    50%      { box-shadow: 0 0 18px 2px rgba(247,201,72,0.10); }
-  }
-  .sponsor-badge { animation: sponsorPulse 3.2s ease-in-out infinite; }
+/* Section header */
+.section-header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
+.section-title{font-size:0.95rem;font-weight:900;}
+.pts-row{display:flex;gap:6px;flex-wrap:wrap;}
+.pts-badge{background:rgba(255,215,0,0.1);border:1px solid rgba(255,215,0,0.2);
+  color:#FFD700;padding:3px 9px;border-radius:20px;font-size:0.7rem;font-weight:800;}
 
-  /* ── Auth side panels: hide on narrow screens ── */
-  @media (max-width: 900px) {
-    .auth-side-panel { display: none !important; }
-  }
+/* Progress */
+.prog-bar{height:3px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;margin-bottom:8px;}
+.prog-fill{height:100%;background:linear-gradient(90deg,#00D4AA,#FFD700);border-radius:3px;transition:width .5s ease;}
+.prog-label{font-size:0.76rem;color:#7788aa;text-align:center;margin-bottom:18px;}
 
-  /* ── Vote buttons ── */
-  .vote-btn { transition: transform 0.12s, filter 0.12s, box-shadow 0.12s; }
-  .vote-btn:hover  { transform: scale(1.03) skewX(-1deg); filter: brightness(1.12); }
-  .vote-btn:active { transform: scale(0.97); }
+/* Groups */
+.groups-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));gap:10px;margin-bottom:32px;}
+.group-card{background:rgba(255,255,255,0.04);border:1.5px solid rgba(255,255,255,0.08);
+  border-radius:14px;padding:14px;cursor:pointer;transition:all .2s;user-select:none;}
+.group-card:hover{background:rgba(0,212,170,0.07);border-color:rgba(0,212,170,0.25);transform:translateY(-2px);}
+.group-card.done{border-color:rgba(0,212,170,0.4);background:rgba(0,212,170,0.05);}
+.group-label{font-size:0.68rem;font-weight:900;letter-spacing:1.2px;color:#FFD700;text-transform:uppercase;margin-bottom:10px;}
+.group-team{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:0.86rem;font-weight:500;transition:all .15s;}
+.group-team.picked{color:#00D4AA;font-weight:800;}
+.group-team-adv{margin-left:auto;font-size:0.68rem;color:#00D4AA;font-weight:700;}
+.group-footer{margin-top:8px;font-size:0.7rem;color:#556677;}
+.group-footer.done{color:#00D4AA;}
 
-  /* ── Debate card gradient border ── */
-  .debate-card-wrap {
-    background: linear-gradient(135deg, #4fc4b830, #f7c94820, #e8635a30);
-    padding: 1.5px;
-    border-radius: 20px;
-    margin-bottom: 14px;
-  }
-  .debate-card-inner {
-    background: linear-gradient(150deg, #101028 0%, #0d0d22 100%);
-    border-radius: 19px;
-    padding: 24px 18px;
-    position: relative;
-    overflow: hidden;
-  }
-  .debate-card-inner::before {
-    content: '';
-    position: absolute; top:0; left:0; right:0; height:2px;
-    background: linear-gradient(90deg, #4fc4b8, #f7c948, #e8635a);
-    border-radius: 19px 19px 0 0;
-  }
+/* Bracket */
+.bracket-scroll{overflow-x:auto;padding-bottom:20px;margin:0 -4px;}
+.bracket-grid{display:flex;min-width:860px;padding:0 4px;}
+.bracket-round{display:flex;flex-direction:column;flex:1;min-width:130px;}
+.br-label{text-align:center;font-size:0.66rem;font-weight:900;color:#FFD700;letter-spacing:1px;
+  text-transform:uppercase;padding:8px 4px 14px;}
+.br-slots{display:flex;flex-direction:column;flex:1;justify-content:space-around;padding:0 4px;gap:6px;}
+.br-match{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;overflow:hidden;transition:all .2s;}
+.br-match.can-pick{cursor:pointer;}
+.bs-match.can-pick:hover{border-color:rgba(0,212,170,0.4);background:rgba(0,212,170,0.07);}
+.br-team{display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:0.76rem;font-weight:600;}
+.br-team+.br-team{border-top:1px solid rgba(255,255,255,0.05);}
+.br-team.tbd{color:#334455;font-style:italic;}
+.br-team.correct{color:#00D4AA;}
+.br-team.wrong{color:#ff7777;text-decoration:line-through;}
+.br-team.my-pick{color:#FFD700;}
+.br-pts{margin-left:auto;font-size:0.62rem;color:#FFD700;font-weight:800;}
+
+/* Final champion display */
+.champion-display{text-align:center;margin-top:12px;padding:12px;background:rgba(255,215,0,0.06);
+  border:1px solid rgba(255,215,0,0.2);border-radius:12px;}
+.champion-label{font-size:0.68rem;color:#7788aa;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;}
+.champion-name{font-size:1.1rem;font-weight:900;color:#FFD700;}
+.champion-score{font-size:0.72rem;color:#557766;margin-top:4px;}
+
+/* Modals */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,10,0.85);backdrop-filter:blur(6px);
+  display:flex;align-items:center;justify-content:center;z-index:200;padding:16px;}
+.modal-box{background:#0c0c20;border:1px solid rgba(255,255,255,0.1);border-radius:20px;
+  padding:26px;width:100%;max-width:400px;position:relative;animation:fadeIn .25s ease;}
+.modal-title{font-size:1.05rem;font-weight:900;margin-bottom:3px;}
+.modal-sub{font-size:0.8rem;color:#7788aa;margin-bottom:18px;line-height:1.5;}
+.modal-close{position:absolute;top:14px;right:14px;background:rgba(255,255,255,0.08);
+  border:none;color:#aaa;width:28px;height:28px;border-radius:50%;font-size:0.95rem;
+  display:flex;align-items:center;justify-content:center;}
+
+/* Pick buttons */
+.pick-btn{display:flex;align-items:center;gap:12px;width:100%;padding:13px 15px;
+  border:2px solid rgba(255,255,255,0.08);border-radius:12px;background:rgba(255,255,255,0.03);
+  color:#eeeeff;font-size:0.92rem;font-weight:600;margin-bottom:8px;transition:all .2s;text-align:left;}
+.pick-btn:hover{border-color:rgba(0,212,170,0.35);background:rgba(0,212,170,0.07);}
+.pick-btn.sel{border-color:#00D4AA;background:rgba(0,212,170,0.12);color:#00D4AA;}
+.pick-btn-flag{font-size:1.35rem;}
+.pick-btn-check{margin-left:auto;font-size:0.85rem;}
+.pick-rank{margin-left:auto;font-size:0.68rem;color:#00D4AA;font-weight:700;}
+
+/* Save button */
+.save-btn{width:100%;margin-top:14px;padding:13px;border-radius:12px;border:none;
+  background:linear-gradient(135deg,#00D4AA,#00b89a);color:#050510;font-size:0.92rem;
+  font-weight:900;transition:all .2s;}
+.save-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,212,170,0.28);}
+.save-btn:disabled{opacity:.38;cursor:not-allowed;}
+
+/* Final score */
+.score-row{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px;}
+.score-in{width:56px;text-align:center;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);
+  border-radius:8px;padding:8px 4px;font-size:1.1rem;font-weight:900;color:#eeeeff;}
+.score-in:focus{outline:none;border-color:#00D4AA;}
+
+/* Auth */
+.auth-in{width:100%;padding:11px 14px;border-radius:10px;background:rgba(255,255,255,0.06);
+  border:1px solid rgba(255,255,255,0.12);color:#eeeeff;font-size:0.9rem;margin-bottom:10px;}
+.auth-in:focus{outline:none;border-color:#00D4AA;}
+.auth-btn-main{width:100%;padding:12px;border-radius:11px;border:none;
+  background:linear-gradient(135deg,#00D4AA,#00b89a);color:#050510;font-size:0.92rem;font-weight:900;transition:all .2s;}
+.auth-btn-main:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,212,170,0.28);}
+.auth-toggle{text-align:center;margin-top:12px;font-size:0.8rem;color:#7788aa;}
+.auth-toggle button{background:none;border:none;color:#00D4AA;font-weight:700;}
+.auth-err{background:rgba(255,80,80,0.1);border:1px solid rgba(255,80,80,0.25);border-radius:8px;
+  padding:7px 12px;font-size:0.78rem;color:#ff9999;margin-bottom:10px;}
+
+/* Wagers */
+.wager-top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:18px;}
+.new-wager-btn{background:linear-gradient(135deg,#FFD700,#ffaa00);color:#050510;border:none;
+  padding:10px 22px;border-radius:10px;font-weight:900;font-size:0.86rem;transition:all .2s;}
+.new-wager-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,215,0,0.3);}
+.filter-tabs{display:flex;gap:6px;}
+.filter-tab{padding:7px 14px;border-radius:8px;font-size:0.78rem;font-weight:700;
+  border:1px solid rgba(255,255,255,0.1);background:transparent;color:#7788aa;transition:all .15s;}
+.filter-tab.active{background:rgba(255,215,0,0.1);border-color:rgba(255,215,0,0.3);color:#FFD700;}
+.wagers-list{display:flex;flex-direction:column;gap:10px;}
+.wager-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
+  border-radius:14px;padding:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;transition:all .2s;}
+.wager-card.open{border-color:rgba(255,215,0,0.18);}
+.wager-card.accepted{border-color:rgba(0,212,170,0.2);}
+.wager-card.settled{opacity:.6;}
+.wager-info{flex:1;min-width:200px;}
+.wager-match-lbl{font-size:0.68rem;color:#556677;margin-bottom:3px;}
+.wager-matchup{font-size:0.9rem;font-weight:700;}
+.wager-backing{font-size:0.76rem;margin-top:4px;color:#7788aa;}
+.wager-backing .team{color:#00D4AA;font-weight:700;}
+.wager-winner{font-size:0.76rem;color:#88ee88;font-weight:700;margin-top:4px;}
+.wager-amt{font-size:1.15rem;font-weight:900;color:#FFD700;white-space:nowrap;}
+.wager-amt span{font-size:0.68rem;color:#7788aa;display:block;text-align:center;font-weight:400;}
+.status-badge{padding:4px 9px;border-radius:20px;font-size:0.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;}
+.status-badge.open{background:rgba(255,215,0,0.12);color:#FFD700;}
+.status-badge.accepted{background:rgba(0,212,170,0.12);color:#00D4AA;}
+.status-badge.settled{background:rgba(100,220,100,0.12);color:#88ee88;}
+.status-badge.cancelled{background:rgba(255,100,100,0.1);color:#ff8888;}
+.accept-btn{padding:8px 16px;border-radius:8px;border:1px solid rgba(0,212,170,0.35);
+  background:rgba(0,212,170,0.09);color:#00D4AA;font-weight:700;font-size:0.8rem;transition:all .2s;}
+.accept-btn:hover{background:rgba(0,212,170,0.18);}
+.cancel-btn{padding:8px 16px;border-radius:8px;border:1px solid rgba(255,100,100,0.25);
+  background:transparent;color:#ff8888;font-weight:700;font-size:0.8rem;transition:all .2s;}
+.cancel-btn:hover{background:rgba(255,100,100,0.07);}
+
+/* Wager create modal */
+.wager-select{width:100%;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.1);color:#eeeeff;font-size:0.86rem;margin-bottom:12px;}
+.wager-select:focus{outline:none;border-color:#00D4AA;}
+.wager-select option{background:#0c0c20;}
+.field-label{font-size:0.7rem;color:#7788aa;font-weight:800;text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;}
+.amt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:10px;}
+.amt-btn{padding:9px 4px;border-radius:9px;border:1px solid rgba(255,255,255,0.1);
+  background:rgba(255,255,255,0.04);color:#cce;font-weight:700;font-size:0.86rem;transition:all .15s;}
+.amt-btn.active{border-color:#FFD700;background:rgba(255,215,0,0.1);color:#FFD700;}
+.amt-btn:hover:not(.active){border-color:rgba(255,215,0,0.25);}
+.custom-amt{width:100%;padding:9px 12px;border-radius:9px;background:rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.1);color:#eeeeff;font-size:0.88rem;margin-bottom:10px;}
+.custom-amt:focus{outline:none;border-color:#FFD700;}
+.team-pick-row{display:flex;gap:8px;margin-bottom:10px;}
+.team-pick-btn{flex:1;padding:11px 6px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);
+  background:rgba(255,255,255,0.04);color:#eeeeff;font-weight:700;font-size:0.82rem;transition:all .2s;}
+.team-pick-btn.sel{border-color:#FFD700;background:rgba(255,215,0,0.1);color:#FFD700;}
+.team-pick-btn:hover:not(.sel){border-color:rgba(255,215,0,0.25);}
+.stripe-note{background:rgba(255,215,0,0.05);border:1px solid rgba(255,215,0,0.12);border-radius:9px;
+  padding:10px 12px;font-size:0.73rem;color:#aa9944;margin-bottom:12px;line-height:1.5;}
+.submit-wager-btn{width:100%;padding:12px;border-radius:11px;border:none;
+  background:linear-gradient(135deg,#FFD700,#ffaa00);color:#050510;font-size:0.92rem;font-weight:900;transition:all .2s;}
+.submit-wager-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,215,0,0.28);}
+.submit-wager-btn:disabled{opacity:.38;cursor:not-allowed;}
+
+/* Leaderboard */
+.lb-list{display:flex;flex-direction:column;gap:8px;}
+.lb-row{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:11px 15px;transition:all .2s;}
+.lb-row.me{border-color:rgba(0,212,170,0.3);background:rgba(0,212,170,0.05);}
+.lb-rank{font-size:0.82rem;font-weight:900;color:#445566;width:24px;text-align:center;}
+.lb-rank.top{color:#FFD700;font-size:1rem;}
+.lb-av{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#1a2a4c,#2a1a4c);
+  display:flex;align-items:center;justify-content:center;font-weight:900;font-size:0.78rem;color:#8899cc;flex-shrink:0;}
+.lb-name{flex:1;font-weight:700;font-size:0.88rem;}
+.lb-pts{font-size:1.05rem;font-weight:900;color:#FFD700;}
+.lb-pts span{font-size:0.62rem;color:#7788aa;font-weight:400;display:block;text-align:right;}
+
+/* Admin */
+.admin-section{margin-bottom:28px;}
+.admin-title{font-size:0.72rem;font-weight:900;color:#FFD700;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;}
+.admin-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px;padding:13px 15px;margin-bottom:7px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.admin-lbl{flex:1;font-size:0.86rem;font-weight:700;min-width:180px;}
+.admin-in{width:46px;text-align:center;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);
+  border-radius:8px;padding:6px 4px;font-size:0.88rem;font-weight:700;color:#eeeeff;}
+.admin-in:focus{outline:none;border-color:#00D4AA;}
+.admin-sel{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+  color:#eeeeff;padding:7px 9px;border-radius:8px;font-size:0.8rem;}
+.admin-sel:focus{outline:none;border-color:#00D4AA;}
+.admin-sel option{background:#0c0c20;}
+.admin-save{padding:7px 15px;border-radius:8px;background:rgba(0,212,170,0.12);
+  border:1px solid rgba(0,212,170,0.28);color:#00D4AA;font-weight:700;font-size:0.8rem;transition:all .15s;}
+.admin-save:hover{background:rgba(0,212,170,0.22);}
+.admin-done{font-size:0.72rem;color:#00D4AA;margin-top:3px;}
+.group-adv-btn{padding:5px 11px;border-radius:7px;font-size:0.78rem;font-weight:700;transition:all .15s;cursor:pointer;}
+
+/* Empty / toast */
+.empty{text-align:center;padding:48px 24px;color:#445566;}
+.empty .e{font-size:2.5rem;display:block;margin-bottom:10px;}
+.empty p{margin:0;font-size:0.88rem;line-height:1.5;}
+.toast{position:fixed;bottom:22px;right:22px;background:#0c1522;border:1px solid rgba(0,212,170,0.3);
+  border-radius:12px;padding:11px 17px;font-size:0.84rem;font-weight:600;color:#00D4AA;
+  z-index:999;animation:fadeIn .3s ease;box-shadow:0 8px 24px rgba(0,0,0,0.4);}
+.toast.err{border-color:rgba(255,100,100,0.3);color:#ff9999;}
+.spinner{width:22px;height:22px;border:2px solid rgba(0,212,170,0.2);border-top-color:#00D4AA;
+  border-radius:50%;animation:spin .7s linear infinite;margin:40px auto;}
+.divider{border:none;border-top:1px solid rgba(255,255,255,0.06);margin:18px 0;}
+.pts-explainer{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+  border-radius:11px;padding:10px 14px;display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-bottom:20px;}
+.pts-item{text-align:center;}
+.pts-item-val{font-size:0.95rem;font-weight:900;color:#FFD700;}
+.pts-item-lbl{font-size:0.62rem;color:#7788aa;text-transform:uppercase;letter-spacing:.5px;}
+
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+@keyframes spin{to{transform:rotate(360deg);}}
+.fade-in{animation:fadeIn .35s ease forwards;}
+
+@media(max-width:600px){
+  .wc-header{padding:10px 12px;}
+  .wc-page{padding:14px 10px 70px;}
+  .groups-grid{grid-template-columns:repeat(2,1fr);gap:7px;}
+  .wc-hero-title{font-size:1.4rem;}
+  .wager-card{gap:10px;}
+  .bracket-grid{min-width:720px;}
+}
 `;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-const PAL = ['#e05252','#e07c52','#c8a84a','#52a852','#4a9fd4','#7b62d4','#c462d4','#4ac8b4'];
-const avatarColor = id => { let h=0; for (const c of String(id)) h=(h*31+c.charCodeAt(0))%PAL.length; return PAL[h]; };
-const initials = n => (n||'U').replace(/[._]/g,' ').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
-const timeAgo = ts => { const m=(Date.now()-new Date(ts).getTime())/60000; if(m<1) return 'just now'; if(m<60) return `${Math.round(m)}m ago`; if(m<1440) return `${Math.floor(m/60)}h ago`; return `${Math.floor(m/1440)}d ago`; };
-const formatDate = d => new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+/* ââ DB helpers âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+const db={
+  async loadEntry(uid){const{data}=await supabase.from('wc_entries').select('*').eq('user_id',uid).maybeSingle();return data;},
+  async saveEntry(uid,entryData,pts){return supabase.from('wc_entries').upsert({user_id:uid,entry_data:entryData,total_points:pts,last_updated:new Date().toISOString()},{onConflict:'user_id'});},
+  async loadResults(){const{data}=await supabase.from('wc_results').select('*');const m={};(data||[]).forEach(r=>{if(r.match_id.startsWith('group_'))m[r.match_id]=r.winner?r.winner.split(','):[];else m[r.match_id]=r.winner;if(r.match_id==='final'&&r.score_a!=null)m['final_score']={a:r.score_a,b:r.score_b};});return m;},
+  async saveResult(mid,winner,sA,sB){return supabase.from('wc_results').upsert({match_id:mid,winner,score_a:sA??null,score_b:sB??null},{onConflict:'match_id'});},
+  async loadWagers(filter,uid){let q=supabase.from('wc_wagers').select('*').order('created_at',{ascending:false});if(filter==='open')q=q.eq('status','open');else if(filter==='mine'&&uid)q=q.or(`creator_id.eq.${uid},taker_id.eq.${uid}`);const{data}=await q;return data||[];},
+  async createWager(creatorId,mid,desc,creatorTeam,takerTeam,cents){return supabase.from('wc_wagers').insert({creator_id:creatorId,match_id:mid,match_desc:desc,creator_team:creatorTeam,taker_team:takerTeam,amount_cents:cents,status:'open'}).select().single();},
+  async acceptWager(wid,tid){return supabase.from('wc_wagers').update({taker_id:tid,status:'accepted'}).eq('id',wid).eq('status','open').select().single();},
+  async cancelWager(wid,uid){return supabase.from('wc_wagers').update({status:'cancelled'}).eq('id',wid).eq('creator_id',uid).eq('status','open');},
+  async leaderboard(){const{data}=await supabase.from('wc_entries').select('user_id,total_points').order('total_points',{ascending:false}).limit(100);return data||[];},
+  async isAdmin(uid){const{data}=await supabase.from('user_profiles').select('is_admin').eq('id',uid).maybeSingle();return data?.is_admin===true;},
+};
 
-function calcPctA(debate, debateComments, userVote, voteCounts) {
-  if (!debate) return 50;
-  if (debate.is_closed) return debate.final_pct_a ?? 50;
-  const boostA = debateComments.filter(c => c.side==='A' && c.upvote_count>=5).length * 0.5;
-  const boostB = debateComments.filter(c => c.side==='B' && c.upvote_count>=5).length * 0.5;
-  const baseA = (voteCounts?.countA??0) + (debate.base_seed_a??45);
-  const baseB = (voteCounts?.countB??0) + (debate.base_seed_b??45);
-  const totalA = baseA + boostA + (userVote==='A'?1:0);
-  const totalB = baseB + boostB + (userVote==='B'?1:0);
-  return Math.round((totalA/(totalA+totalB))*100);
+function useToast(){
+  const[toast,setToast]=useState(null);
+  const show=useCallback((msg,type='ok')=>{setToast({msg,type});setTimeout(()=>setToast(null),3200);},[]);
+  return{toast,show};
 }
 
-// ─── PickASydeLogo ────────────────────────────────────────────────────────────
-// Pick (teal) · A (white diamond shimmer, animated pivot) · Syde (red-orange)
-function PickASydeLogo({ size = 'small' }) {
-  const large = size === 'large';
-  const fs    = large ? 'clamp(34px, 10vw, 72px)' : 28;
-  const aFs   = large ? 'clamp(40px, 12vw, 86px)' : 34;   // A is noticeably bigger
-
-  const textStyle = (color) => ({
-    fontFamily: "'DM Sans',system-ui,sans-serif",
-    fontSize: fs,
-    fontWeight: 900,
-    fontStyle: 'italic',
-    color,
-    textShadow: `0 0 ${large?28:10}px ${color}99, 0 2px 0 rgba(0,0,0,0.85)`,
-    letterSpacing: large ? '-3px' : '-0.5px',
-    display: 'inline-block',
-    whiteSpace: 'nowrap',
-  });
-
-  return (
-    <div className="pas-logo-wrap" style={{ whiteSpace: 'nowrap' }}>
-      <div className="pas-logo">
-        <span style={{ ...textStyle('#4fc4b8'), transform: 'skewX(-8deg)' }}>Pick</span>
-        <span
-          className="pas-a-diamond"
-          style={{
-            fontFamily: "'DM Sans',system-ui,sans-serif",
-            fontSize: aFs,
-            fontWeight: 900,
-            fontStyle: 'italic',
-            letterSpacing: 0,
-            margin: large ? '0 2px' : '0 1px',
-          }}
-        >A</span>
-        <span style={{ ...textStyle('#e8635a'), transform: 'skewX(-8deg)' }}>Syde</span>
-      </div>
-    </div>
-  );
-}
-
-// ─── Avatar ───────────────────────────────────────────────────────────────────
-function Av({ uid, name, size = 32 }) {
-  return (
-    <div style={{ width:size, height:size, borderRadius:'50%', background:avatarColor(uid||'anon'), display:'flex', alignItems:'center', justifyContent:'center', fontSize:size*0.33, fontWeight:800, color:'#fff', fontFamily:'monospace', flexShrink:0 }}>
-      {initials(name)}
-    </div>
-  );
-}
-
-// ─── VoteBar ──────────────────────────────────────────────────────────────────
-function VoteBar({ pctA, lA, lB, voteCounts, mindsChanged, animate = true }) {
-  const [displayed, setDisplayed] = useState(animate ? 50 : pctA);
-  useEffect(() => {
-    if (animate) { const t = setTimeout(()=>setDisplayed(pctA), 300); return ()=>clearTimeout(t); }
-    else setDisplayed(pctA);
-  }, [pctA, animate]);
-
-  const totalVotes = (voteCounts?.countA || 0) + (voteCounts?.countB || 0) + 2400;
-  const formattedVotes = new Intl.NumberFormat('en-US').format(totalVotes);
-
-  return (
-    <div>
-      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
-        <span style={{ fontWeight:800, fontSize:14, color:'#4fc4b8' }}>{Math.round(displayed)}% · {lA}</span>
-        <span style={{ fontWeight:800, fontSize:14, color:'#e8635a' }}>{lB} · {100-Math.round(displayed)}%</span>
-      </div>
-      <div style={{ height:10, borderRadius:5, background:'#e8635a20', overflow:'hidden', position:'relative' }}>
-        <div style={{ position:'absolute', left:0, top:0, bottom:0, width:`${displayed}%`, background:'linear-gradient(90deg,#4fc4b8,#38a89d)', borderRadius:'5px 0 0 5px', transition:'width 0.9s cubic-bezier(.4,0,.2,1)', boxShadow:'2px 0 10px rgba(79,196,184,0.5)' }} />
-        <div style={{ position:'absolute', left:'50%', top:0, bottom:0, width:1, background:'rgba(255,255,255,0.07)', transform:'translateX(-50%)' }} />
-      </div>
-      <div style={{ display:'flex', justifyContent:'space-between', marginTop:10, fontSize:11, color:'#5070a0', fontWeight:600 }}>
-        <span>🗳️ {formattedVotes} votes cast</span>
-        {mindsChanged !== undefined && <span>🔄 {mindsChanged} minds changed today</span>}
-      </div>
-    </div>
-  );
-}
-
-// ─── CommentCard ──────────────────────────────────────────────────────────────
-function CommentCard({ c, currentUserId, hasUpvoted, onUpvote, onRemoveUpvote, locked, onEdit, onDelete, userVote, canSwitchSides, onChangedMyMind }) {
-  const [editing, setEditing]       = useState(false);
-  const [editText, setEditText]     = useState(c.text);
-  const [saving, setSaving]         = useState(false);
-  const [confirmDel, setConfirmDel] = useState(false);
-  const displayName  = c.user_id===currentUserId ? 'You' : (c.user_profiles?.display_name||'user');
-  const isOwn        = currentUserId===c.user_id;
-  const isHistorical = c.comment_status === 'historical';
-  // Can edit only if: own comment, not locked, and not historical (historical = read-only)
-  const canEdit      = isOwn && !locked && !isHistorical;
-  const boosting     = c.upvote_count >= 5;
-  // "This changed my mind" shows on opposite-side comments only
-  const isOppositeSide = userVote && c.side !== userVote && !isOwn;
-  const showChangedMyMind = isOppositeSide && canSwitchSides && !locked;
-
-  async function saveEdit() {
-    const trimmed = editText.trim();
-    if (!trimmed || trimmed === c.text) { setEditing(false); setEditText(c.text); return; }
-    setSaving(true);
-    try { await onEdit(c.id, trimmed); setEditing(false); }
-    catch(err) { console.error('edit error:', err); }
-    finally { setSaving(false); }
+/* ââ Auth Modal ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function AuthModal({onClose,onAuth}){
+  const[mode,setMode]=useState('login');
+  const[email,setEmail]=useState('');
+  const[pw,setPw]=useState('');
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState('');
+  async function go(e){
+    e.preventDefault();setLoading(true);setErr('');
+    try{
+      if(mode==='login'){const{data,error}=await supabase.auth.signInWithPassword({email,password:pw});if(error)throw error;onAuth(data.user);}
+      else{const{data,error}=await supabase.auth.signUp({email,password:pw});if(error)throw error;if(data.user)onAuth(data.user);else setErr('Check your email to confirm.');}
+    }catch(e){setErr(e.message);}finally{setLoading(false);}
   }
-
-  return (
-    <div style={{ background: isHistorical ? '#0c0c1e' : '#0e0e22', border:`1px solid ${isHistorical?'#14142a':'#191930'}`, borderLeft:`3px solid ${c.side==='A'?'#4fc4b8':'#e8635a'}${isHistorical?'55':''}`, borderRadius:'0 10px 10px 0', padding:'12px 14px', marginBottom:8, opacity: isHistorical ? 0.72 : 1 }}>
-      {/* Historical badge */}
-      {isHistorical && (
-        <div style={{ fontSize:10, fontWeight:700, color:'#5858a8', background:'rgba(88,88,168,0.08)', border:'1px solid #5858a820', borderRadius:4, padding:'2px 7px', display:'inline-block', marginBottom:8, letterSpacing:0.5 }}>
-          Previous position
-        </div>
-      )}
-      <div style={{ display:'flex', gap:9, alignItems:'flex-start' }}>
-        <Av uid={c.user_id} name={displayName} size={28} />
-        <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5, flexWrap:'wrap' }}>
-            <span style={{ fontWeight:700, fontSize:13, color: isHistorical ? '#7070a0' : '#c8c8e0' }}>{displayName}</span>
-            <span style={{ fontSize:10, fontWeight:800, padding:'1px 6px', borderRadius:3, letterSpacing:0.8, background:c.side==='A'?'rgba(79,196,184,.12)':'rgba(232,99,90,.12)', color:c.side==='A'?'#4fc4b8':'#e8635a', border:`1px solid ${c.side==='A'?'#4fc4b818':'#e8635a18'}`, opacity: isHistorical ? 0.6 : 1 }}>
-              {c.side_label||(c.side==='A'?'SIDE A':'SIDE B')}
-            </span>
-            {boosting && !isHistorical && <span style={{ fontSize:10, fontWeight:800, color:'#f7c948' }}>⚡ BOOST</span>}
-            <span style={{ fontSize:10, color:'#2e2e48', marginLeft:'auto' }}>{timeAgo(c.created_at)}</span>
-            {canEdit && !editing && !confirmDel && (
-              <button onClick={()=>{setEditing(true);setEditText(c.text);}} title="Edit comment" style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#33334a', padding:'0 0 0 4px', lineHeight:1 }}>✏️</button>
-            )}
-            {canEdit && !editing && !confirmDel && (
-              <button onClick={()=>setConfirmDel(true)} title="Delete comment" style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, color:'#33334a', padding:'0 0 0 2px', lineHeight:1 }}>🗑️</button>
-            )}
-            {confirmDel && (
-              <span style={{ display:'inline-flex', alignItems:'center', gap:5, marginLeft:4 }}>
-                <span style={{ fontSize:11, color:'#e8635a' }}>Delete?</span>
-                <button onClick={()=>onDelete(c.id)} style={{ background:'#e8635a', border:'none', borderRadius:4, color:'#fff', fontSize:10, fontWeight:700, padding:'2px 7px', cursor:'pointer' }}>Yes</button>
-                <button onClick={()=>setConfirmDel(false)} style={{ background:'none', border:'1px solid #2a2a48', borderRadius:4, color:'#6060aa', fontSize:10, padding:'2px 7px', cursor:'pointer' }}>No</button>
-              </span>
-            )}
-          </div>
-
-          {editing ? (
-            <div>
-              <textarea
-                value={editText}
-                onChange={e=>setEditText(e.target.value)}
-                rows={3}
-                style={{ width:'100%', background:'#0a0a1a', border:'1px solid #2a2a48', borderRadius:8, color:'#d0d0e8', fontSize:16, padding:'9px 11px', resize:'none', boxSizing:'border-box', outline:'none', fontFamily:'inherit', lineHeight:1.55, marginBottom:8 }}
-                autoFocus
-              />
-              <div style={{ display:'flex', gap:7 }}>
-                <button onClick={saveEdit} disabled={saving} style={{ padding:'5px 13px', background:'linear-gradient(135deg,#4fc4b8,#38a89d)', border:'none', borderRadius:7, color:'#0a0a1a', fontWeight:800, fontSize:12, cursor:saving?'default':'pointer', opacity:saving?0.7:1 }}>
-                  {saving ? 'Saving…' : 'Save'}
-                </button>
-                <button onClick={()=>{setEditing(false);setEditText(c.text);}} style={{ padding:'5px 11px', background:'transparent', border:'1px solid #1e1e38', borderRadius:7, color:'#3a3a58', fontSize:12, cursor:'pointer' }}>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <p style={{ margin:'0 0 8px', fontSize:14, color: isHistorical ? '#7070a0' : '#a8a8c8', lineHeight:1.6, fontStyle: isHistorical ? 'italic' : 'normal' }}>{stripHtml(c.text)}</p>
-              <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-                {!locked && !isHistorical && (
-                  <button
-                    onClick={()=>{
-                      if(isOwn) return;
-                      if(hasUpvoted) onRemoveUpvote(c.id);
-                      else onUpvote(c.id);
-                    }}
-                    title={hasUpvoted?'Remove upvote':'Upvote'}
-                    style={{ display:'inline-flex', alignItems:'center', gap:4, background:hasUpvoted?'rgba(79,196,184,.15)':'rgba(255,255,255,.04)', border:`1px solid ${hasUpvoted?'#4fc4b8':'#1e1e38'}`, borderRadius:5, padding:'2px 9px', cursor:isOwn?'default':'pointer', fontSize:12, color:hasUpvoted?'#4fc4b8':'#3e3e58', fontWeight:600, transition:'all 0.15s' }}>
-                    {hasUpvoted ? '▲' : '△'} {c.upvote_count}
-                  </button>
-                )}
-                {(locked || isHistorical) && <span style={{ fontSize:12, color:'#2e2e48' }}>▲ {c.upvote_count}</span>}
-                {showChangedMyMind && (
-                  <button onClick={()=>onChangedMyMind(c)} style={{ marginLeft:'auto', display:'inline-flex', alignItems:'center', gap:6, background:'linear-gradient(135deg,rgba(247,201,72,0.12),rgba(232,99,90,0.07))', border:'1px solid rgba(247,201,72,0.35)', borderRadius:20, padding:'5px 14px', fontSize:12, fontWeight:900, color:'#f7c948', cursor:'pointer', letterSpacing:0.4, boxShadow:'0 2px 10px rgba(247,201,72,0.12)', flexShrink:0, transition:'all 0.15s' }}>
-                    🤯 Okay, they got me
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+  return(
+    <div className="modal-backdrop" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal-box fade-in">
+        <button className="modal-close" onClick={onClose}>â</button>
+        <div className="modal-title">{mode==='login'?'Welcome back ð':'Join the bracket ð'}</div>
+        <div className="modal-sub">{mode==='login'?'Sign in to pick teams and place wagers.':'Create a free account to enter your bracket.'}</div>
+        {err&&<div className="auth-err">{err}</div>}
+        <form onSubmit={go}>
+          <input className="auth-in" type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} required/>
+          <input className="auth-in" type="password" placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)} required/>
+          <button className="auth-btn-main" type="submit" disabled={loading}>{loading?'â¦':mode==='login'?'Sign In':'Create Account'}</button>
+        </form>
+        <div className="auth-toggle">{mode==='login'?<>No account? <button onClick={()=>setMode('signup')}>Sign up free</button></>:<>Have one? <button onClick={()=>setMode('login')}>Sign in</button></>}</div>
       </div>
     </div>
   );
 }
 
-// ─── VoteFlashOverlay ─────────────────────────────────────────────────────────
-function VoteFlashOverlay({ side, label, color, onDone }) {
-  useEffect(() => { const t=setTimeout(onDone, 2600); return ()=>clearTimeout(t); }, [onDone]);
-
-  const bolts    = Array.from({length:12},(_,i)=>{ const a=(i*30)*Math.PI/180, d=155+(i%4)*30; return {tx:Math.cos(a)*d,ty:Math.sin(a)*d,r:i*30,delay:i*0.05}; });
-  const particles= Array.from({length:26},(_,i)=>{ const a=(i*13.85)*Math.PI/180, d=75+(i%5)*30; return {tx:Math.cos(a)*d,ty:Math.sin(a)*d,size:3+(i%5)*2.4,delay:(i%7)*0.04}; });
-
-  return (
-    <div className="vf-overlay vf-shake" style={{ position:'fixed', inset:0, zIndex:999, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
-      <div className="vf-bg" style={{ position:'absolute', inset:0, background:`radial-gradient(ellipse at center, ${color}cc 0%, ${color}55 30%, ${color}11 60%, transparent 78%)` }} />
-      <div className="vf-ring"  style={{ position:'absolute', left:'50%', top:'50%', width:90,  height:90,  borderRadius:'50%', border:`3px solid ${color}`, boxShadow:`0 0 24px ${color}` }} />
-      <div className="vf-ring2" style={{ position:'absolute', left:'50%', top:'50%', width:55,  height:55,  borderRadius:'50%', border:`2px solid #f7c948`, boxShadow:`0 0 16px #f7c948` }} />
-      {particles.map((p,i)=>(
-        <div key={i} className="vf-particle" style={{ position:'absolute', left:'50%', top:'50%', width:p.size, height:p.size, borderRadius:'50%', background:i%3===0?'#f7c948':color, boxShadow:`0 0 6px ${i%3===0?'#f7c948':color}`, animationDelay:`${p.delay}s`, '--tx':`${p.tx}px`, '--ty':`${p.ty}px` }} />
-      ))}
-      {bolts.map((b,i)=>(
-        <div key={i} className="vf-bolt" style={{ position:'absolute', left:'50%', top:'50%', fontSize:20, lineHeight:1, animationDelay:`${b.delay}s`, '--tx':`${b.tx}px`, '--ty':`${b.ty}px`, '--r':`${b.r}deg` }}>⚡</div>
-      ))}
-      {/* Main display */}
-      <div style={{ position:'relative', zIndex:2, textAlign:'center' }}>
-        <div className="vf-label" style={{ fontFamily:"'DM Sans',system-ui,sans-serif", fontSize:'clamp(12px,2.5vw,18px)', fontWeight:900, fontStyle:'italic', color:'#ffffff77', textShadow:`0 0 10px ${color}`, letterSpacing:'5px', textTransform:'uppercase', marginBottom:4 }}>
-          You picked
-        </div>
-        <div className="vf-chosen" style={{ fontFamily:"'DM Sans',system-ui,sans-serif", fontSize:'clamp(38px,9vw,72px)', fontWeight:900, fontStyle:'italic', color:'#fff', textShadow:`0 0 28px ${color}, 0 0 60px ${color}, 0 4px 0 rgba(0,0,0,0.9)`, letterSpacing:'-2px', whiteSpace:'nowrap', WebkitTextStroke:`2px ${color}` }}>
-          {label}
-        </div>
-        <div className="vf-label" style={{ fontFamily:"'DM Sans',system-ui,sans-serif", fontSize:'clamp(18px,4vw,32px)', fontWeight:900, fontStyle:'italic', color:'#f7c948', textShadow:'0 0 18px #f7c948, 0 0 45px rgba(247,201,72,0.4)', letterSpacing:'2px', marginTop:10, animationDelay:'0.12s' }}>
-          ✓ VOTED!
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── SwitchConfirmModal ───────────────────────────────────────────────────────
-function SwitchConfirmModal({ debate, previousSide, newSide, persuadingComment, onConfirm, onCancel, switching }) {
-  const [reason, setReason] = useState('');
-  const prevLabel = previousSide==='A' ? debate.label_a : debate.label_b;
-  const newLabel  = newSide==='A' ? debate.label_a : debate.label_b;
-  const prevColor = previousSide==='A' ? '#4fc4b8' : '#e8635a';
-  const newColor  = newSide==='A' ? '#4fc4b8' : '#e8635a';
-
-  return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.92)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:16 }}>
-      <div style={{ background:'#0e0e22', border:'1px solid #1e1e3a', borderRadius:20, padding:24, maxWidth:380, width:'100%' }}>
-        {/* Header */}
-        <div style={{ textAlign:'center', marginBottom:18 }}>
-          <div style={{ fontSize:22, marginBottom:8 }}>🔄</div>
-          <h3 style={{ margin:0, fontWeight:900, fontSize:17, color:'#eeeeff' }}>Switch your vote?</h3>
-          <p style={{ margin:'8px 0 0', fontSize:13, color:'#5a5a80' }}>
-            This will switch your vote from{' '}
-            <span style={{ color:prevColor, fontWeight:800 }}>{prevLabel}</span>
-            {' '}to{' '}
-            <span style={{ color:newColor, fontWeight:800 }}>{newLabel}</span>.
-          </p>
-        </div>
-
-        {/* The persuading comment */}
-        {persuadingComment && (
-          <div style={{ background:'#080818', border:'1px solid #252545', borderLeft:`3px solid ${newColor}`, borderRadius:'0 8px 8px 0', padding:'10px 12px', marginBottom:16, fontSize:13, color:'#7070a8', fontStyle:'italic', lineHeight:1.5 }}>
-            "{persuadingComment.text.length>140 ? persuadingComment.text.slice(0,140)+'…' : persuadingComment.text}"
-            <div style={{ fontSize:11, color:'#3a3a58', marginTop:5, fontStyle:'normal' }}>— {persuadingComment.user_profiles?.display_name||'user'}</div>
-          </div>
-        )}
-
-        {/* Optional reason */}
-        <div style={{ marginBottom:16 }}>
-          <label style={{ display:'block', fontSize:12, color:'#4a4a70', marginBottom:7, fontWeight:700 }}>What changed your mind? <span style={{ fontWeight:400, color:'#33334a' }}>(optional)</span></label>
-          <textarea
-            value={reason}
-            onChange={e=>setReason(e.target.value.slice(0,280))}
-            placeholder="Explain your new position…"
-            rows={3}
-            style={{ width:'100%', background:'#0a0a1a', border:'1px solid #1e1e38', borderRadius:9, color:'#d0d0e8', fontSize:16, padding:'10px 12px', resize:'none', boxSizing:'border-box', outline:'none', fontFamily:'inherit', lineHeight:1.5 }}
-          />
-          <div style={{ textAlign:'right', fontSize:11, color:'#2e2e48', marginTop:3 }}>{reason.length}/280</div>
-        </div>
-
-        {/* Note about old comment */}
-        <p style={{ fontSize:11, color:'#3a3a58', margin:'0 0 16px', lineHeight:1.5 }}>
-          Your previous comment will remain visible as part of the debate history.
-        </p>
-
-        {/* Buttons */}
-        <div style={{ display:'flex', gap:10 }}>
-          <button onClick={onCancel} disabled={switching} style={{ flex:1, padding:'11px 0', background:'transparent', border:'1px solid #1e1e38', borderRadius:10, color:'#5a5a80', fontWeight:700, fontSize:14, cursor:'pointer' }}>
-            Cancel
+/* ââ Group Pick Modal ââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function GroupPickModal({group,current,onSave,onClose}){
+  const[sel,setSel]=useState(current||[]);
+  function toggle(t){setSel(p=>p.includes(t)?p.filter(x=>x!==t):p.length>=2?[p[1],t]:[...p,t]);}
+  return(
+    <div className="modal-backdrop" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal-box fade-in">
+        <button className="modal-close" onClick={onClose}>â</button>
+        <div className="modal-title">â½ Group {group.id} â Pick 2 to Advance</div>
+        <div className="modal-sub">Select the two teams you believe will qualify from this group. <strong style={{color:'#FFD700'}}>+{POINTS.group} pts each</strong>.</div>
+        {group.teams.map(t=>(
+          <button key={t} className={`pick-btn ${sel.includes(t)?'sel':''}`} onClick={()=>toggle(t)}>
+            <span className="pick-btn-flag">{flag(t)}</span>
+            <span>{t}</span>
+            {sel.indexOf(t)===0&&<span className="pick-rank">1st</span>}
+            {sel.indexOf(t)===1&&<span className="pick-rank" style={{color:'#7788aa'}}>2nd</span>}
+            {sel.includes(t)&&<span className="pick-btn-check">â</span>}
           </button>
-          <button onClick={()=>onConfirm(reason.trim())} disabled={switching} style={{ flex:1, padding:'11px 0', background:`linear-gradient(135deg,${newColor},${newColor}cc)`, border:'none', borderRadius:10, color:'#0a0a1a', fontWeight:900, fontSize:14, cursor:switching?'default':'pointer', opacity:switching?0.7:1 }}>
-            {switching ? 'Switching…' : `Switch to ${newLabel}`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── AnimatedQuestions ────────────────────────────────────────────────────────
-function AnimatedQuestions({ compact = false }) {
-  const [idx, setIdx] = useState(0);
-  const [key, setKey] = useState(0);
-  useEffect(() => { const t=setInterval(()=>{setIdx(i=>(i+1)%SAMPLE_QUESTIONS.length);setKey(k=>k+1);},2800); return()=>clearInterval(t); },[]);
-  const shown = Array.from({length:5},(_,i)=>SAMPLE_QUESTIONS[(idx+i)%SAMPLE_QUESTIONS.length]);
-  const opacities = [0.5, 0.72, 1, 0.72, 0.5];
-  const sizes     = [11,   13,  16, 13,   11  ];
-  const weights   = [400,  600, 800, 600,  400 ];
-  const colors    = ['#3a3a72','#5858a8','#a8a8e8','#5858a8','#3a3a72'];
-  return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', padding: compact ? '24px 20px' : '40px 28px 40px 24px' }}>
-      <div style={{ fontSize:10, fontWeight:800, letterSpacing:3, color:'#6060aa', marginBottom:24, textTransform:'uppercase' }}>Pick A Syde on…</div>
-      <div style={{ display:'flex', flexDirection:'column', gap: compact ? 12 : 18 }}>
-        {shown.map((text,i)=>(
-          <div key={`${key}-${i}`} style={{ fontSize:sizes[i], fontWeight:weights[i], color:colors[i], opacity:opacities[i], lineHeight:1.4, paddingLeft:i===2?12:0, borderLeft:i===2?'2px solid #8888dd':'2px solid transparent', animation:i===4?'aqFade 0.5s ease-out':undefined }}>
-            {text}
-          </div>
         ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── PlatformExplainer ────────────────────────────────────────────────────────
-function PlatformExplainer({ compact = false }) {
-  return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', padding: compact ? '24px 20px' : '40px 24px 40px 28px' }}>
-      <div style={{ fontSize:10, fontWeight:800, letterSpacing:3, color:'#6060aa', marginBottom:16, textTransform:'uppercase' }}>What is PickASyde?</div>
-      <p style={{ fontSize:16, fontWeight:800, color:'#a0a0e0', lineHeight:1.55, margin:'0 0 14px' }}>
-        One question.<br/>Two sides.<br/>You decide.
-      </p>
-      <p style={{ fontSize:13, color:'#8080c0', lineHeight:1.85, margin:'0 0 12px' }}>
-        Every day a new debate drops. Pick your side, back it with a comment, and watch the argument play out live.
-      </p>
-      <p style={{ fontSize:12, color:'#6868a8', lineHeight:1.85, margin:'0 0 20px' }}>
-        No doom-scrolling. No algorithm rabbit holes. One focused debate per day — then it locks at midnight and the result stands forever.
-      </p>
-      <div style={{ borderTop:'1px solid #252545', paddingTop:16, display:'flex', flexDirection:'column', gap:10 }}>
-        {[
-          ['⚡','Votes update live as the crowd picks sides'],
-          ['💬','5 upvotes on your comment boosts your side\'s score'],
-          ['🔥','Vote every day to build your streak'],
-          ['🔒','Debate locks at midnight EST — the verdict is final'],
-          ['😌','Totally free, no ads chasing you around'],
-        ].map(([ic,text])=>(
-          <div key={text} style={{ display:'flex', alignItems:'flex-start', gap:9, fontSize:12, color:'#7070b0', lineHeight:1.5 }}>
-            <span style={{ flexShrink:0, marginTop:1 }}>{ic}</span><span>{text}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Share Modal ──────────────────────────────────────────────────────────────
-function ShareModal({ debate, vote, commentText, pct, streak, onClose }) {
-  const [copied, setCopied] = useState(false);
-  const shareText = generateShareText(debate, vote, commentText, pct);
-  const sideLabel = vote==='A' ? debate.label_a : debate.label_b;
-  const copyText = ()=> navigator.clipboard.writeText(shareText).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);});
-  const shareX   = ()=> window.open(getXShareUrl(shareText),'_blank');
-  const shareIG  = ()=> { copyText(); alert('Text copied! Paste into your Instagram story or bio.'); };
-  const shareTikTok = ()=> { copyText(); alert('Text copied! Paste into your TikTok bio or video caption.'); };
-  return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.92)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:200, padding:16 }}>
-      <div style={{ background:'#0e0e22', border:'1px solid #1e1e3a', borderRadius:20, padding:22, maxWidth:360, width:'100%' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
-          <h3 style={{ margin:0, fontWeight:900, fontSize:18, color:'#eeeeff' }}>Share your take</h3>
-          <button onClick={onClose} style={{ background:'none', border:'none', color:'#33334a', cursor:'pointer', fontSize:18 }}>✕</button>
-        </div>
-        <div style={{ background:'linear-gradient(135deg,#0a0a1a,#141428)', border:'1px solid #2a2a45', borderRadius:14, padding:18, marginBottom:16, position:'relative', overflow:'hidden' }}>
-          <div style={{ fontSize:10, fontWeight:800, letterSpacing:2, color:'#33334a', marginBottom:10 }}>⚡ PICKASYDE · {formatDate(debate.date)}</div>
-          <div style={{ fontSize:14, fontWeight:700, color:'#d0d0e8', marginBottom:12, lineHeight:1.4 }}>"{debate.question}"</div>
-          <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:vote==='A'?'rgba(79,196,184,.12)':'rgba(232,99,90,.12)', border:`1px solid ${vote==='A'?'#4fc4b833':'#e8635a33'}`, borderRadius:8, padding:'5px 12px', marginBottom:commentText?10:14 }}>
-            <span style={{ fontSize:13, fontWeight:800, color:vote==='A'?'#4fc4b8':'#e8635a' }}>I picked {sideLabel}</span>
-          </div>
-          {commentText && <p style={{ margin:'0 0 12px', fontSize:11, color:'#7070a0', fontStyle:'italic', lineHeight:1.5 }}>"{commentText.slice(0,70)}{commentText.length>70?'...':''}"</p>}
-          <div style={{ height:5, borderRadius:3, background:'#e8635a20', overflow:'hidden', marginBottom:6 }}>
-            <div style={{ height:'100%', width:`${pct}%`, background:'#4fc4b8', borderRadius:3 }} />
-          </div>
-          <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'#4fc4b8', fontWeight:700, marginBottom:8 }}>
-            <span>{pct}% agree</span><span>{debate.label_a} vs {debate.label_b}</span>
-          </div>
-          <div style={{ fontSize:9, color:'#2a2a48' }}>pickasyde.com</div>
-        </div>
-        {streak>=2 && (
-          <div style={{ background:'rgba(247,201,72,.06)', border:'1px solid #f7c94818', borderRadius:10, padding:'10px 12px', marginBottom:14 }}>
-            <div style={{ fontSize:10, fontWeight:800, color:'#f7c948', letterSpacing:0.8, marginBottom:6 }}>💡 STREAK CHALLENGE</div>
-            <div style={{ fontSize:11, color:'#7777aa', lineHeight:1.5 }}>You've voted {streak} days in a row. Dare your friends to disagree all week.</div>
-          </div>
-        )}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:8 }}>
-          <button onClick={shareX} style={{ padding:'12px 8px', background:'#000', border:'1px solid #333', borderRadius:10, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-            <span style={{ fontWeight:900 }}>𝕏</span> Post
-          </button>
-          <button onClick={shareIG} style={{ padding:'12px 8px', background:'linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045)', border:'none', borderRadius:10, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-            <svg viewBox="0 0 24 24" width="18" height="18"><defs><radialGradient id="ig" cx="30%" cy="107%" r="150%"><stop offset="0%" stopColor="#fdf497"/><stop offset="5%" stopColor="#fdf497"/><stop offset="45%" stopColor="#fd5949"/><stop offset="60%" stopColor="#d6249f"/><stop offset="90%" stopColor="#285AEB"/></radialGradient></defs><rect x="2" y="2" width="20" height="20" rx="5" ry="5" fill="url(#ig)"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="white" strokeWidth="1.8"/><circle cx="17.5" cy="6.5" r="1.2" fill="white"/></svg>
-            Instagram
-          </button>
-          <button onClick={shareTikTok} style={{ padding:'12px 8px', background:'#000', border:'1px solid #333', borderRadius:10, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="white"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V8.69a8.18 8.18 0 004.78 1.52V6.76a4.85 4.85 0 01-1.01-.07z"/></svg>
-            TikTok
-          </button>
-        </div>
-        <button onClick={copyText} style={{ width:'100%', padding:12, background:copied?'rgba(79,196,184,.15)':'rgba(255,255,255,.05)', border:`1px solid ${copied?'#4fc4b8':'#1e1e3a'}`, borderRadius:10, color:copied?'#4fc4b8':'#6666aa', fontWeight:700, fontSize:13, cursor:'pointer' }}>
-          {copied ? '✓ Copied!' : '📋 Copy share text'}
+        <button className="save-btn" disabled={sel.length<2} onClick={()=>onSave(group.id,sel)}>
+          {sel.length<2?`Pick ${2-sel.length} more`:`Save Group ${group.id} â`}
         </button>
       </div>
     </div>
   );
 }
 
-// ─── Backoffice Screen ────────────────────────────────────────────────────────
-function BackofficeScreen() {
-  const [tab, setTab]           = useState('questions');
-  const [debates, setDebates]   = useState([]);
-  const [allComments, setAllComments] = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  // New debate form
-  const [newQ, setNewQ]         = useState('');
-  const [newDate, setNewDate]   = useState('');
-  const [newLabelA, setNewLabelA] = useState('');
-  const [newLabelB, setNewLabelB] = useState('');
-  // Edit debate
-  const [editId, setEditId]     = useState(null);
-  const [editFields, setEditFields] = useState({});
+/* ââ Knockout Pick Modal âââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function KnockoutModal({matchId,tA,tB,round,current,onSave,onClose}){
+  const[pick,setPick]=useState(current||null);
+  const[sA,setSA]=useState('');
+  const[sB,setSB]=useState('');
+  const rk=matchId.replace(/_\d+$/,'');
+  const ptVal=POINTS[rk]??0;
+  const isFinal=matchId==='final';
+  const otherTeam=pick===tA?tB:tA;
+  return(
+    <div className="modal-backdrop" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal-box fade-in">
+        <button className="modal-close" onClick={onClose}>â</button>
+        <div className="modal-title">{ROUND_LABELS[rk]||round} â Pick the Winner</div>
+        <div className="modal-sub">Correct pick earns <strong style={{color:'#FFD700'}}>{ptVal} pts</strong>.</div>
+        {[tA,tB].map(t=>(
+          <button key={t} className={`pick-btn ${pick===t?'sel':''}`} onClick={()=>setPick(t)}>
+            <span className="pick-btn-flag">{flag(t)}</span>
+            <span>{t}</span>
+            {pick===t&&<span className="pick-btn-check">â</span>}
+          </button>
+        ))}
+        {isFinal&&pick&&(
+          <>
+            <hr className="divider"/>
+            <div style={{fontSize:'0.82rem',fontWeight:700,marginBottom:10,color:'#FFD700'}}>ð¯ Tiebreaker â Predict the final score <span style={{color:'#7788aa',fontWeight:400}}>({POINTS.exact_score} bonus pts)</span></div>
+            <div className="score-row">
+              <div style={{textAlign:'center'}}>
+                <div style={{fontSize:'0.68rem',color:'#7788aa',marginBottom:4}}>{flag(pick)} {pick}</div>
+                <input className="score-in" type="number" min="0" max="20" placeholder="0" value={sA} onChange={e=>setSA(e.target.value)}/>
+              </div>
+              <span style={{fontSize:'1.2rem',color:'#334455',fontWeight:700}}>â</span>
+              <div style={{textAlign:'center'}}>
+                <div style={{fontSize:'0.68rem',color:'#7788aa',marginBottom:4}}>{flag(otherTeam)} {otherTeam}</div>
+                <input className="score-in" type="number" min="0" max="20" placeholder="0" value={sB} onChange={e=>setSB(e.target.value)}/>
+              </div>
+            </div>
+          </>
+        )}
+        <button className="save-btn" disabled={!pick}
+          onClick={()=>onSave(matchId,pick,isFinal&&sA!==''&&sB!==''?{a:parseInt(sA),b:parseInt(sB)}:null)}>
+          {pick?`Lock in ${flag(pick)} ${pick}`:'Pick a team to continue'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
-  const inp = { width:'100%', padding:'9px 12px', background:'#0a0a1a', border:'1px solid #1e1e38', borderRadius:8, color:'#d0d0e8', fontSize:14, marginBottom:8, boxSizing:'border-box', outline:'none', fontFamily:'inherit' };
+/* ââ Bracket Match Cell ââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function BrMatch({matchId,s1,s2,gp,kp,results,onPick,round}){
+  const t1=resolveSlot(s1,gp,kp);
+  const t2=resolveSlot(s2,gp,kp);
+  const myPick=kp[matchId];
+  const actual=results[matchId];
+  const canPick=!isLocked()&&t1&&t2&&!actual;
+  const rk=matchId.replace(/_\d+$/,'');
+  const ptVal=POINTS[rk]??0;
+  function TeamRow({t}){
+    if(!t)return <div className="br-team tbd"><span style={{fontSize:'0.72rem'}}>TBD</span></div>;
+    const isCorrect=actual&&t===actual;
+    const isWrong=actual&&myPick===t&&!isCorrect;
+    const isMyPick=!actual&&myPick===t;
+    let cls='br-team';
+    if(isCorrect)cls+=' correct';
+    else if(isWrong)cls+=' wrong';
+    else if(isMyPick)cls+=' my-pick';
+    return(
+      <div className={cls}>
+        <span className="br-team-flag" style={{fontSize:'0.85rem'}}>{flag(t)}</span>
+        <span style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t}</span>
+        {isCorrect&&<span className="br-pts">â+{ptVal}</span>}
+        {isMyPick&&<span className="br-pts">+{ptVal}?</span>}
+      </div>
+    );
+  }
+  return(
+    <div className={`br-match ${canPick?'can-pick':''}`}
+      onClick={()=>canPick&&onPick&&onPick(matchId,t1,t2,round)}
+      title={canPick?`Click to pick: ${t1} vs ${t2}`:''}>
+      <TeamRow t={t1}/><TeamRow t={t2}/>
+    </div>
+  );
+}
 
-  useEffect(()=>{ loadData(); },[tab]);
+/* ââ Bracket Tab âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function BracketTab({user,entry,onEntryChange,results,showToast}){
+  const[groupModal,setGroupModal]=useState(null);
+  const[koModal,setKoModal]=useState(null);
+  const[view,setView]=useState('groups');
+  const gp=entry?.groupPicks||{};
+  const kp=entry?.knockoutPicks||{};
+  const done=WC_GROUPS.filter(g=>(gp[g.id]||[]).length===2).length;
+  const locked=isLocked();
 
-  async function loadData() {
-    setLoading(true);
-    try {
-      if(tab==='questions') {
-        const data = await getAllDebatesAdmin();
-        setDebates(data);
-      } else {
-        const data = await getRecentCommentsAdmin(80);
-        setAllComments(data);
-      }
-    } catch(err){ console.error(err); }
-    finally{ setLoading(false); }
+  function saveGroup(gid,teams){
+    const ne={...(entry||{}),groupPicks:{...gp,[gid]:teams},knockoutPicks:kp};
+    const pts=computePoints(ne,results);
+    onEntryChange(ne,pts);
+    setGroupModal(null);
+    showToast(`Group ${gid} picks saved! â`);
   }
 
-  async function handleCreate() {
-    if(!newQ.trim()||!newDate||!newLabelA.trim()||!newLabelB.trim()) { alert('Fill in all fields'); return; }
-    setSubmitting(true);
-    try {
-      await createDebate({ question:newQ.trim(), date:newDate, label_a:newLabelA.trim(), label_b:newLabelB.trim() });
-      setNewQ(''); setNewDate(''); setNewLabelA(''); setNewLabelB('');
-      loadData();
-    } catch(err){ alert('Error: '+err.message); }
-    finally{ setSubmitting(false); }
+  function saveKO(mid,winner,score){
+    const nkp={...kp,[mid]:winner};
+    const ne={...(entry||{}),groupPicks:gp,knockoutPicks:nkp};
+    if(score)ne.finalScore=score;
+    const pts=computePoints(ne,results);
+    onEntryChange(ne,pts);
+    setKoModal(null);
+    showToast(`${flag(winner)} ${winner} locked in!`);
   }
 
-  async function handleDeleteDebateRow(id) {
-    if(!window.confirm('Delete this debate and all its votes/comments? This cannot be undone.')) return;
-    try { await deleteDebate(id); loadData(); }
-    catch(err){ alert('Error: '+err.message); }
+  function handleKO(mid,t1,t2,round){
+    if(!user){showToast('Sign in to make picks','err');return;}
+    setKoModal({mid,tA:t1,tB:t2,round});
   }
 
-  async function handleSaveEdit(id) {
-    try {
-      await updateDebate(id, editFields);
-      setEditId(null); setEditFields({});
-      loadData();
-    } catch(err){ alert('Error: '+err.message); }
-  }
+  const mp={gp,kp,results,onPick:handleKO};
 
-  async function handleDeleteCommentRow(id) {
-    try {
-      await deleteComment(id);
-      setAllComments(prev=>prev.filter(c=>c.id!==id));
-    } catch(err){ alert('Error: '+err.message); }
-  }
-
-  const today = new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
-
-  return (
-    <div style={{ maxWidth:680, margin:'0 auto', padding:'16px 14px 80px' }}>
-      {/* Header */}
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:20 }}>
-        <div style={{ fontSize:20 }}>🛠️</div>
-        <div>
-          <div style={{ fontWeight:900, fontSize:18, color:'#d0d0e8' }}>Backoffice</div>
-          <div style={{ fontSize:11, color:'#33334a' }}>Admin only — manage debates &amp; comments</div>
-        </div>
+  return(
+    <div>
+      <div className="wc-hero">
+        <div className="wc-trophy">ð</div>
+        <h1 className="wc-hero-title">FIFA World Cup 2026</h1>
+        <p className="wc-hero-sub">Pick which teams advance through every round. Score points for every correct call. The closer you get, the more points you rack up.</p>
+        {locked&&<div className="wc-lock">ð Tournament has kicked off â picks are locked. Follow the bracket live!</div>}
       </div>
 
-      {/* Tabs */}
-      <div style={{ display:'flex', gap:6, marginBottom:20, borderBottom:'1px solid #1a1a30', paddingBottom:12 }}>
-        {[['questions','📅 Questions'],['comments','💬 Comments']].map(([k,l])=>(
-          <button key={k} onClick={()=>setTab(k)} style={{ padding:'6px 16px', background:tab===k?'#1a1a35':'transparent', border:`1px solid ${tab===k?'#2a2a55':'#1a1a30'}`, borderRadius:20, color:tab===k?'#d0d0e8':'#33334a', fontWeight:tab===k?800:500, fontSize:13, cursor:'pointer' }}>{l}</button>
+      <div className="view-toggle">
+        {[['groups','â½ Group Stage'],['bracket','ð Knockout Bracket']].map(([v,l])=>(
+          <button key={v} className={`view-btn ${view===v?'active':''}`} onClick={()=>setView(v)}>{l}</button>
         ))}
       </div>
 
-      {/* ── Questions Tab ── */}
-      {tab==='questions' && (
-        <div>
-          {/* Add new debate form */}
-          <div style={{ background:'#0e0e22', border:'1px solid #191930', borderRadius:14, padding:18, marginBottom:20 }}>
-            <div style={{ fontWeight:800, fontSize:14, color:'#8888c8', marginBottom:14 }}>➕ Schedule a Debate</div>
-            <input style={inp} placeholder="Debate question (e.g. Remote work or office?)" value={newQ} onChange={e=>setNewQ(e.target.value)}/>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:8 }}>
-              <input style={{...inp,marginBottom:0}} type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}/>
-              <input style={{...inp,marginBottom:0}} placeholder="Side A label" value={newLabelA} onChange={e=>setNewLabelA(e.target.value)}/>
-              <input style={{...inp,marginBottom:0}} placeholder="Side B label" value={newLabelB} onChange={e=>setNewLabelB(e.target.value)}/>
-            </div>
-            <button onClick={handleCreate} disabled={submitting} style={{ marginTop:8, padding:'9px 20px', background:'linear-gradient(135deg,#4fc4b8,#38a89d)', border:'none', borderRadius:9, color:'#0a0a1a', fontWeight:900, fontSize:13, cursor:submitting?'default':'pointer', opacity:submitting?0.7:1 }}>
-              {submitting?'Saving…':'Add to Queue'}
-            </button>
+      {view==='groups'&&(
+        <>
+          <div className="section-header">
+            <div className="section-title">Group Stage â Pick 2 Teams to Advance</div>
+            <span className="pts-badge">+{POINTS.group} pts each</span>
           </div>
+          {!locked&&(
+            <>
+              <div className="prog-bar"><div className="prog-fill" style={{width:`${Math.round((done/16)*100)}%`}}/></div>
+              <div className="prog-label">{done}/16 groups complete {!user&&'â sign in to save picks'}</div>
+            </>
+          )}
+          <div className="groups-grid">
+            {WC_GROUPS.map(g=>{
+              const picks=gp[g.id]||[];
+              const complete=picks.length===2;
+              return(
+                <div key={g.id} className={`group-card ${complete?'done':''}`}
+                  onClick={()=>{if(!user){showToast('Sign in to pick','err');return;}if(locked)return;setGroupModal(g);}}>
+                  <div className="group-label">Group {g.id}</div>
+                  {g.teams.map(t=>(
+                    <div key={t} className={`group-team ${picks.includes(t)?'picked':''}`}>
+                      <span>{flag(t)}</span><span style={{flex:1}}>{t}</span>
+                      {picks.includes(t)&&<span className="group-team-adv">{picks.indexOf(t)===0?'1st':'2nd'}</span>}
+                    </div>
+                  ))}
+                  <div className={`group-footer ${complete?'done':''}`}>
+                    {complete?`â ${picks[0]} & ${picks[1]}`:locked?'â':'Click to pick 2'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
-          {/* Debate list */}
-          {loading ? <div style={{ color:'#33334a', textAlign:'center', padding:32 }}>Loading…</div> : debates.map(d=>{
-            const isPast   = d.date < today;
-            const isToday  = d.date === today;
-            const isFuture = d.date > today;
-            const statusColor = d.is_closed?'#e8635a55':isToday?'#4fc4b8':isFuture?'#f7c948':'#33334a';
-            const statusLabel = d.is_closed?'🔒 Closed':isToday?'🔴 Live':isFuture?'📅 Upcoming':'⌛ Past';
-            return (
-              <div key={d.id} style={{ background:'#0e0e22', border:'1px solid #191930', borderRadius:12, padding:'12px 14px', marginBottom:8 }}>
-                {editId===d.id ? (
-                  <div>
-                    <input style={inp} value={editFields.question??d.question} onChange={e=>setEditFields(f=>({...f,question:e.target.value}))} placeholder="Question"/>
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
-                      <input style={{...inp,marginBottom:0}} type="date" value={editFields.date??d.date} onChange={e=>setEditFields(f=>({...f,date:e.target.value}))}/>
-                      <input style={{...inp,marginBottom:0}} placeholder="Side A" value={editFields.label_a??d.label_a} onChange={e=>setEditFields(f=>({...f,label_a:e.target.value}))}/>
-                      <input style={{...inp,marginBottom:0}} placeholder="Side B" value={editFields.label_b??d.label_b} onChange={e=>setEditFields(f=>({...f,label_b:e.target.value}))}/>
+      {view==='bracket'&&(
+        <>
+          <div className="pts-explainer">
+            {[['R32',POINTS.r32],['R16',POINTS.r16],['QF',POINTS.qf],['SF',POINTS.sf],['Final',POINTS.final],['Exact Score',POINTS.exact_score]].map(([l,v])=>(
+              <div className="pts-item" key={l}><div className="pts-item-val">+{v}</div><div className="pts-item-lbl">{l}</div></div>
+            ))}
+          </div>
+          {!user&&<div className="empty fade-in"><span className="e">ð</span><p>Sign in to make your bracket picks and appear on the leaderboard.</p></div>}
+          <div className="bracket-scroll">
+            <div className="bracket-grid">
+              <div className="bracket-round">
+                <div className="br-label">Round of 32</div>
+                <div className="br-slots">{R32.map(([mid,s1,s2])=><BrMatch key={mid} matchId={mid} s1={s1} s2={s2} round="r32" {...mp}/>)}</div>
+              </div>
+              <div className="bracket-round">
+                <div className="br-label">Round of 16</div>
+                <div className="br-slots">{R16.map(([mid,s1,s2])=><BrMatch key={mid} matchId={mid} s1={s1} s2={s2} round="r16" {...mp}/>)}</div>
+              </div>
+              <div className="bracket-round">
+                <div className="br-label">Quarterfinals</div>
+                <div className="br-slots">{QF.map(([mid,s1,s2])=><BrMatch key={mid} matchId={mid} s1={s1} s2={s2} round="qf" {...mp}/>)}</div>
+              </div>
+              <div className="bracket-round">
+                <div className="br-label">Semifinals</div>
+                <div className="br-slots">{SF.map(([mid,s1,s2])=><BrMatch key={mid} matchId={mid} s1={s1} s2={s2} round="sf" {...mp}/>)}</div>
+              </div>
+              <div className="bracket-round">
+                <div className="br-label" style={{color:'#FFD700'}}>ð Final</div>
+                <div className="br-slots" style={{justifyContent:'center'}}>
+                  <BrMatch matchId="final" s1="sf_1" s2="sf_2" round="final" {...mp}/>
+                  {kp['final']&&(
+                    <div className="champion-display">
+                      <div className="champion-label">Your Champion</div>
+                      <div className="champion-name">{flag(kp['final'])} {kp['final']}</div>
+                      {entry?.finalScore&&<div className="champion-score">Score pick: {entry.finalScore.a}â{entry.finalScore.b}</div>}
                     </div>
-                    <div style={{ display:'flex', gap:7, marginTop:10 }}>
-                      <button onClick={()=>handleSaveEdit(d.id)} style={{ padding:'6px 14px', background:'linear-gradient(135deg,#4fc4b8,#38a89d)', border:'none', borderRadius:7, color:'#0a0a1a', fontWeight:800, fontSize:12, cursor:'pointer' }}>Save</button>
-                      <button onClick={()=>{setEditId(null);setEditFields({});}} style={{ padding:'6px 12px', background:'transparent', border:'1px solid #1e1e38', borderRadius:7, color:'#3a3a58', fontSize:12, cursor:'pointer' }}>Cancel</button>
-                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {groupModal&&<GroupPickModal group={groupModal} current={gp[groupModal.id]} onSave={saveGroup} onClose={()=>setGroupModal(null)}/>}
+      {koModal&&<KnockoutModal matchId={koModal.mid} tA={koModal.tA} tB={koModal.tB} round={koModal.round} current={kp[koModal.mid]} onSave={saveKO} onClose={()=>setKoModal(null)}/>}
+    </div>
+  );
+}
+
+/* ââ Wager Create Modal ââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function WagerCreateModal({user,entry,onClose,onDone}){
+  const gp=entry?.groupPicks||{};
+  const kp=entry?.knockoutPicks||{};
+  const matchups=[];
+  [...R32,...R16,...QF,...SF,[['final','sf_1','sf_2']]].forEach(p=>{
+    const[mid,s1,s2]=Array.isArray(p[0])?p[0]:p;
+    const t1=resolveSlot(s1,gp,kp),t2=resolveSlot(s2,gp,kp);
+    if(t1&&t2){
+      const rk=mid.replace(/_\d+$/,'');
+      const label=`${ROUND_LABELS[rk]||rk}: ${flag(t1)} ${t1} vs ${flag(t2)} ${t2}`;
+      matchups.push({mid,label,t1,t2});
+    }
+  });
+  const[selMatch,setSelMatch]=useState(matchups[0]?.mid||'');
+  const[selTeam,setSelTeam]=useState('');
+  const[amt,setAmt]=useState(5);
+  const[custom,setCustom]=useState('');
+  const[loading,setLoading]=useState(false);
+  const cur=matchups.find(m=>m.mid===selMatch);
+  const finalAmt=custom?parseFloat(custom):amt;
+  async function submit(){
+    if(!cur||!selTeam||!finalAmt)return;
+    setLoading(true);
+    const other=selTeam===cur.t1?cur.t2:cur.t1;
+    const{error}=await db.createWager(user.id,selMatch,cur.label,selTeam,other,Math.round(finalAmt*100));
+    setLoading(false);
+    if(error){alert(error.message);return;}
+    onDone();onClose();
+  }
+  return(
+    <div className="modal-backdrop" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal-box fade-in" style={{maxWidth:430}}>
+        <button className="modal-close" onClick={onClose}>â</button>
+        <div className="modal-title">ð° Create a Side Wager</div>
+        <div className="modal-sub">Back your team in a specific matchup. Other users can accept by taking the other side.</div>
+        {matchups.length===0
+          ?<p style={{color:'#7788aa',fontSize:'0.85rem'}}>Finish your group stage picks first so bracket matchups are populated.</p>
+          :<>
+            <div className="field-label">Select Match</div>
+            <select className="wager-select" value={selMatch} onChange={e=>{setSelMatch(e.target.value);setSelTeam('');}}>
+              {matchups.map(m=><option key={m.mid} value={m.mid}>{m.label}</option>)}
+            </select>
+            {cur&&<>
+              <div className="field-label">I Back This Team to Win</div>
+              <div className="team-pick-row">
+                <button className={`team-pick-btn ${selTeam===cur.t1?'sel':''}`} onClick={()=>setSelTeam(cur.t1)}>{flag(cur.t1)} {cur.t1}</button>
+                <button className={`team-pick-btn ${selTeam===cur.t2?'sel':''}`} onClick={()=>setSelTeam(cur.t2)}>{flag(cur.t2)} {cur.t2}</button>
+              </div>
+              <div className="field-label">Wager Amount</div>
+              <div className="amt-grid">
+                {[1,5,10,20].map(a=><button key={a} className={`amt-btn ${amt===a&&!custom?'active':''}`} onClick={()=>{setAmt(a);setCustom('');}}>${a}</button>)}
+              </div>
+              <input className="custom-amt" type="number" min="0.50" step="0.50" placeholder="Custom amount (e.g. 25)" value={custom} onChange={e=>{setCustom(e.target.value);setAmt(0);}}/>
+              <div className="stripe-note">
+                ð³ <strong>Payment:</strong> Wager amounts are tracked in-app. For automated escrow (funds held until match result), connect Stripe in Admin settings. Until then, wagers use the honor system â settle directly with your opponent via Venmo, Cash App, etc.
+              </div>
+              <button className="submit-wager-btn" disabled={!selTeam||!finalAmt||loading} onClick={submit}>
+                {loading?'â¦':`Post Wager â ${selTeam?`${flag(selTeam)} ${selTeam} wins`:'Pick a team'} for $${finalAmt||'0'}`}
+              </button>
+            </>}
+          </>
+        }
+      </div>
+    </div>
+  );
+}
+
+/* ââ Wagers Tab ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function WagersTab({user,entry,showToast}){
+  const[wagers,setWagers]=useState([]);
+  const[filter,setFilter]=useState('open');
+  const[loading,setLoading]=useState(true);
+  const[showCreate,setShowCreate]=useState(false);
+  const fmt=c=>`$${(c/100).toFixed(2)}`;
+  async function load(){setLoading(true);setWagers(await db.loadWagers(filter,user?.id));setLoading(false);}
+  useEffect(()=>{load();},[filter,user]);
+  async function accept(w){
+    if(!user){showToast('Sign in to accept wagers','err');return;}
+    if(w.creator_id===user.id){showToast("Can't accept your own wager",'err');return;}
+    const{error}=await db.acceptWager(w.id,user.id);
+    if(error){showToast(error.message,'err');return;}
+    showToast(`Wager accepted! You're backing ${flag(w.taker_team)} ${w.taker_team} ð¤`);
+    load();
+  }
+  async function cancel(w){
+    await db.cancelWager(w.id,user.id);
+    showToast('Wager cancelled.');load();
+  }
+  return(
+    <div>
+      <div className="wc-hero" style={{paddingBottom:8}}>
+        <div style={{fontSize:'2rem',marginBottom:4}}>ð°</div>
+        <h1 className="wc-hero-title" style={{fontSize:'1.5rem'}}>Side Wagers</h1>
+        <p className="wc-hero-sub">Back your team in any matchup. Set a dollar amount, post it â another user takes the other side. Winner takes all. Funds settle automatically when match results are entered.</p>
+      </div>
+      <div className="wager-top">
+        <div className="filter-tabs">
+          {[['open','ð Open'],['mine','ð My Wagers']].map(([k,l])=>(
+            <button key={k} className={`filter-tab ${filter===k?'active':''}`} onClick={()=>setFilter(k)}>{l}</button>
+          ))}
+        </div>
+        {user&&<button className="new-wager-btn" onClick={()=>setShowCreate(true)}>+ New Wager</button>}
+      </div>
+      {loading?<div className="spinner"/>:wagers.length===0
+        ?<div className="empty"><span className="e">{filter==='open'?'ð¯':'ð'}</span><p>{filter==='open'?'No open wagers yet. Be the first to post one!':'No wagers created or accepted yet.'}</p></div>
+        :<div className="wagers-list">
+          {wagers.map(w=>{
+            const isCreator=user?.id===w.creator_id;
+            const isTaker=user?.id===w.taker_id;
+            return(
+              <div key={w.id} className={`wager-card ${w.status} fade-in`}>
+                <div className="wager-info">
+                  <div className="wager-match-lbl">{w.match_desc}</div>
+                  <div className="wager-matchup">{flag(w.creator_team)} {w.creator_team} vs {flag(w.taker_team)} {w.taker_team}</div>
+                  <div className="wager-backing">
+                    {isCreator?<><span>You</span> back <span className="team">{flag(w.creator_team)} {w.creator_team}</span></>
+                    :<><span>User</span> backs <span className="team">{flag(w.creator_team)} {w.creator_team}</span></>}
+                    {w.taker_id&&<span> Â· accepted {isTaker?'by you':'by user'}</span>}
                   </div>
-                ) : (
-                  <div>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:10, marginBottom:6 }}>
-                      <div style={{ flex:1 }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
-                          <span style={{ fontSize:10, fontWeight:800, color:statusColor, letterSpacing:0.5 }}>{statusLabel}</span>
-                          <span style={{ fontSize:10, color:'#33334a' }}>{d.date}</span>
-                        </div>
-                        <div style={{ fontSize:14, fontWeight:700, color:'#d0d0e8', lineHeight:1.35 }}>{d.question}</div>
-                        <div style={{ fontSize:11, color:'#33334a', marginTop:4 }}>
-                          <span style={{ color:'#4fc4b8' }}>{d.label_a}</span> vs <span style={{ color:'#e8635a' }}>{d.label_b}</span>
-                        </div>
-                      </div>
-                      <div style={{ display:'flex', gap:5, flexShrink:0 }}>
-                        {!d.is_closed && <button onClick={()=>{setEditId(d.id);setEditFields({});}} style={{ padding:'4px 10px', background:'rgba(255,255,255,.04)', border:'1px solid #1e1e38', borderRadius:6, color:'#6060aa', fontSize:11, cursor:'pointer' }}>✏️</button>}
-                        {(isFuture||!d.is_closed) && <button onClick={()=>handleDeleteDebateRow(d.id)} style={{ padding:'4px 10px', background:'rgba(232,99,90,.06)', border:'1px solid #e8635a22', borderRadius:6, color:'#e8635a', fontSize:11, cursor:'pointer' }}>🗑️</button>}
-                      </div>
-                    </div>
-                    {d.final_pct_a!=null && <div style={{ fontSize:11, color:'#33334a' }}>Final: {d.final_pct_a}% {d.label_a}</div>}
-                  </div>
-                )}
+                  {w.winner_team&&<div className="wager-winner">ð Winner: {flag(w.winner_team)} {w.winner_team}</div>}
+                </div>
+                <div className="wager-amt">{fmt(w.amount_cents)}<span>wager</span></div>
+                <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'flex-end'}}>
+                  <span className={`status-badge ${w.status}`}>{w.status}</span>
+                  {w.status==='open'&&!isCreator&&user&&<button className="accept-btn" onClick={()=>accept(w)}>Accept â {flag(w.taker_team)} {w.taker_team}</button>}
+                  {w.status==='open'&&isCreator&&<button className="cancel-btn" onClick={()=>cancel(w)}>Cancel</button>}
+                </div>
               </div>
             );
           })}
         </div>
-      )}
-
-      {/* ── Comments Tab ── */}
-      {tab==='comments' && (
-        <div>
-          <div style={{ fontSize:11, color:'#33334a', marginBottom:14 }}>Showing the 80 most recent comments across all debates.</div>
-          {loading ? <div style={{ color:'#33334a', textAlign:'center', padding:32 }}>Loading…</div> : allComments.map(c=>(
-            <div key={c.id} style={{ background:'#0e0e22', border:'1px solid #191930', borderLeft:`3px solid ${c.side==='A'?'#4fc4b844':'#e8635a44'}`, borderRadius:'0 10px 10px 0', padding:'10px 14px', marginBottom:7 }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:10, color:'#33334a', marginBottom:4 }}>
-                    <span style={{ color:c.side==='A'?'#4fc4b8':'#e8635a', fontWeight:700 }}>{c.side==='A'?(c.debates?.label_a??'A'):(c.debates?.label_b??'B')}</span>
-                    {' · '}{c.user_profiles?.display_name||'user'}
-                    {c.user_profiles?.is_ai_seed&&<span style={{ marginLeft:5, fontSize:9, color:'#5050a0', fontWeight:800 }}>AI</span>}
-                    {' · '}{c.debates?.question?.slice(0,40)+'…'}
-                    {' · '}{c.debates?.date}
-                  </div>
-                  <div style={{ fontSize:13, color:'#a8a8c8', lineHeight:1.5 }}>{c.text}</div>
-                  {c.comment_status==='historical'&&<div style={{ fontSize:10, color:'#5858a8', marginTop:4 }}>⌛ historical</div>}
-                </div>
-                <button onClick={()=>handleDeleteCommentRow(c.id)} style={{ flexShrink:0, padding:'4px 9px', background:'rgba(232,99,90,.06)', border:'1px solid #e8635a22', borderRadius:6, color:'#e8635a', fontSize:11, cursor:'pointer' }}>🗑️</button>
-              </div>
-            </div>
-          ))}
-          {!loading&&allComments.length===0&&<div style={{ color:'#33334a', textAlign:'center', padding:32 }}>No comments found.</div>}
-        </div>
-      )}
+      }
+      {!user&&<div className="empty" style={{marginTop:24}}><span className="e">ð</span><p>Sign in to create and accept wagers.</p></div>}
+      {showCreate&&<WagerCreateModal user={user} entry={entry} onClose={()=>setShowCreate(false)} onDone={()=>{load();showToast('Wager posted! ð¯');}}/>}
     </div>
   );
 }
 
-// ─── Leaderboard Screen ──────────────────────────────────────────────────────
-function LeaderboardScreen() {
-  const [tab, setTab] = useState('voices');
-
-  const topVoices = [
-    { rank: 1, name: 'Tyrell W.', stat: '847 takes dropped', emoji: '👑' },
-    { rank: 2, name: 'Sofia M.', stat: '634 takes', emoji: '🥈' },
-    { rank: 3, name: 'Marcus T.', stat: '521 takes', emoji: '🥉' },
-    { rank: 4, name: 'Priya R.', stat: '489 takes', emoji: null },
-    { rank: 5, name: 'Derek C.', stat: '412 takes', emoji: null },
-    { rank: 6, name: 'Josh K.', stat: '398 takes', emoji: null },
-    { rank: 7, name: 'Anika J.', stat: '356 takes', emoji: null },
-    { rank: 8, name: 'Chloe B.', stat: '301 takes', emoji: null },
-    { rank: 9, name: 'Mike D.', stat: '287 takes', emoji: null },
-    { rank: 10, name: 'Zoe P.', stat: '241 takes', emoji: null },
-  ];
-
-  const mostPersuasive = [
-    { rank: 1, name: 'Sofia M.', stat: '127 minds changed', emoji: '👑' },
-    { rank: 2, name: 'Anika J.', stat: '94 minds changed', emoji: '🥈' },
-    { rank: 3, name: 'Tyrell W.', stat: '88 minds changed', emoji: '🥉' },
-    { rank: 4, name: 'Priya R.', stat: '71 minds changed', emoji: null },
-    { rank: 5, name: 'Josh K.', stat: '65 minds changed', emoji: null },
-    { rank: 6, name: 'Marcus T.', stat: '58 minds changed', emoji: null },
-    { rank: 7, name: 'Derek C.', stat: '44 minds changed', emoji: null },
-    { rank: 8, name: 'Chloe B.', stat: '39 minds changed', emoji: null },
-    { rank: 9, name: 'Zoe P.', stat: '31 minds changed', emoji: null },
-    { rank: 10, name: 'Mike D.', stat: '27 minds changed', emoji: null },
-  ];
-
-  const streakKings = [
-    { rank: 1, name: 'Marcus T.', stat: '47-day streak', emoji: '👑' },
-    { rank: 2, name: 'Derek C.', stat: '38-day streak', emoji: '🥈' },
-    { rank: 3, name: 'Priya R.', stat: '31-day streak', emoji: '🥉' },
-    { rank: 4, name: 'Josh K.', stat: '28-day streak', emoji: null },
-    { rank: 5, name: 'Tyrell W.', stat: '24-day streak', emoji: null },
-    { rank: 6, name: 'Anika J.', stat: '19-day streak', emoji: null },
-    { rank: 7, name: 'Sofia M.', stat: '17-day streak', emoji: null },
-    { rank: 8, name: 'Chloe B.', stat: '14-day streak', emoji: null },
-    { rank: 9, name: 'Mike D.', stat: '11-day streak', emoji: null },
-    { rank: 10, name: 'Zoe P.', stat: '9-day streak', emoji: null },
-  ];
-
-  const data = tab === 'voices' ? topVoices : tab === 'persuasive' ? mostPersuasive : streakKings;
-
-  return (
-    <div style={{ maxWidth: 680, margin: '0 auto', padding: '16px 14px 80px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-        <div style={{ fontSize: 20 }}>🏆</div>
-        <div>
-          <div style={{ fontWeight: 900, fontSize: 18, color: '#d0d0e8' }}>Leaderboard</div>
-          <div style={{ fontSize: 11, color: '#33334a' }}>Top debaters and influencers</div>
+/* ââ Leaderboard Tab âââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function LeaderboardTab({user}){
+  const[rows,setRows]=useState([]);
+  const[loading,setLoading]=useState(true);
+  useEffect(()=>{(async()=>{setLoading(true);setRows(await db.leaderboard());setLoading(false);})();},[]);
+  const rk=i=>i===0?'ð¥':i===1?'ð¥':i===2?'ð¥':i+1;
+  const initials=id=>id?.slice(0,2).toUpperCase()||'?';
+  return(
+    <div>
+      <div className="wc-hero" style={{paddingBottom:12}}>
+        <div style={{fontSize:'2rem',marginBottom:4}}>ð</div>
+        <h1 className="wc-hero-title" style={{fontSize:'1.5rem'}}>Leaderboard</h1>
+        <p className="wc-hero-sub">Points awarded as real match results come in. The more you get right â and the deeper the round â the more you score.</p>
+      </div>
+      <div className="pts-explainer">
+        {[['Group',POINTS.group],['R32',POINTS.r32],['R16',POINTS.r16],['QF',POINTS.qf],['SF',POINTS.sf],['Final',POINTS.final],['Exact Score',POINTS.exact_score]].map(([l,v])=>(
+          <div className="pts-item" key={l}><div className="pts-item-val">+{v}</div><div className="pts-item-lbl">{l}</div></div>
+        ))}
+      </div>
+      {loading?<div className="spinner"/>:rows.length===0
+        ?<div className="empty"><span className="e">ð</span><p>No entries yet â be the first to submit your bracket!</p></div>
+        :<div className="lb-list">
+          {rows.map((r,i)=>{
+            const isMe=user?.id===r.user_id;
+            return(
+              <div key={r.user_id} className={`lb-row ${isMe?'me':''} fade-in`}>
+                <div className={`lb-rank ${i<3?'top':''}`}>{rk(i)}</div>
+                <div className="lb-av">{initials(r.user_id)}</div>
+                <div className="lb-name">Player {r.user_id.slice(0,8)}{isMe&&<span style={{color:'#00D4AA',marginLeft:6,fontSize:'0.7rem'}}>(you)</span>}</div>
+                <div className="lb-pts">{r.total_points||0}<span>pts</span></div>
+              </div>
+            );
+          })}
         </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid #1a1a30', paddingBottom: 12 }}>
-        {[['voices', 'Top Voices'], ['persuasive', 'Most Persuasive'], ['streaks', 'Streak Kings']].map(([k, l]) => (
-          <button
-            key={k}
-            onClick={() => setTab(k)}
-            style={{
-              padding: '6px 14px',
-              background: tab === k ? '#1a1a35' : 'transparent',
-              border: `1px solid ${tab === k ? '#2a2a55' : '#1a1a30'}`,
-              borderRadius: 20,
-              color: tab === k ? '#d0d0e8' : '#33334a',
-              fontWeight: tab === k ? 800 : 500,
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
-            {l}
-          </button>
-        ))}
-      </div>
-
-      <div>
-        {data.map((item) => (
-          <div
-            key={item.rank}
-            style={{
-              background: '#0e0e22',
-              border: '1px solid #191930',
-              borderRadius: 12,
-              padding: '14px 16px',
-              marginBottom: 8,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-            }}
-          >
-            <div
-              style={{
-                fontWeight: 900,
-                fontSize: 18,
-                color: item.emoji ? '#f7c948' : '#33334a',
-                minWidth: 40,
-                textAlign: 'center',
-              }}
-            >
-              {item.emoji || `#${item.rank}`}
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#d0d0e8', marginBottom: 3 }}>
-                {item.name}
-              </div>
-              <div style={{ fontSize: 12, color: '#7070a0' }}>
-                {tab === 'streaks' ? `🔥 ${item.stat}` : item.stat}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+      }
     </div>
   );
 }
 
-// ─── Closing Countdown ────────────────────────────────────────────────────────
-// Shows "Debate closes in X hours Y min" to create urgency before midnight EST.
-function ClosingCountdown() {
-  const [timeLeft, setTimeLeft] = useState('');
+/* ââ Admin Tab âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+function AdminTab({results,onRefresh,showToast,entry}){
+  const gp=entry?.groupPicks||{};
+  const kp=entry?.knockoutPicks||{};
+  const[saving,setSaving]=useState({});
 
-  useEffect(() => {
-    function compute() {
-      const now = new Date();
-      // Midnight EST
-      const estMidnight = new Date(now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }));
-      estMidnight.setDate(estMidnight.getDate() + 1); // next calendar day
-      // Convert EST midnight to UTC
-      const estOffset = -5 * 60; // EST = UTC-5 (approximate; ignores DST edge case)
-      const utcMidnight = new Date(estMidnight.getTime() - estOffset * 60000);
-      const diff = utcMidnight - now;
-      if (diff <= 0) { setTimeLeft(''); return; }
-      const h = Math.floor(diff / 3600000);
-      const m = Math.floor((diff % 3600000) / 60000);
-      if (h >= 12) { setTimeLeft(''); return; } // only show when <12h left
-      setTimeLeft(h > 0 ? `${h}h ${m}m` : `${m}m`);
+  async function saveGroup(gid,advancers){
+    setSaving(s=>({...s,[`g_${gid}`]:true}));
+    await db.saveResult(`group_${gid}`,advancers.join(','),null,null);
+    setSaving(s=>({...s,[`g_${gid}`]:false}));
+    onRefresh();showToast(`Group ${gid} results saved!`);
+  }
+
+  function KoRow({matchId,s1,s2}){
+    const t1=resolveSlot(s1,gp,kp),t2=resolveSlot(s2,gp,kp);
+    const existing=results[matchId];
+    const[winner,setWinner]=useState(existing||'');
+    const[sA,setSA]=useState('');
+    const[sB,setSB]=useState('');
+    if(!t1||!t2)return null;
+    const isFinal=matchId==='final';
+    async function save(){
+      setSaving(s=>({...s,[matchId]:true}));
+      await db.saveResult(matchId,winner,sA!==''?parseInt(sA):null,sB!==''?parseInt(sB):null);
+      if(winner){await supabase.from('wc_wagers').update({winner_team:winner,status:'settled'}).eq('match_id',matchId).in('status',['open','accepted']);}
+      setSaving(s=>({...s,[matchId]:false}));
+      onRefresh();showToast(`${matchId} result saved & wagers settled!`);
     }
-    compute();
-    const t = setInterval(compute, 60000);
-    return () => clearInterval(t);
-  }, []);
+    return(
+      <div className="admin-card">
+        <div className="admin-lbl">{flag(t1)} {t1} vs {flag(t2)} {t2} <span style={{color:'#334455',fontWeight:400,fontSize:'0.74rem'}}>({matchId})</span></div>
+        <div style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
+          {isFinal&&<><input className="admin-in" type="number" min="0" placeholder="0" value={sA} onChange={e=>setSA(e.target.value)}/><span style={{color:'#334455'}}>â</span><input className="admin-in" type="number" min="0" placeholder="0" value={sB} onChange={e=>setSB(e.target.value)}/></>}
+          <select className="admin-sel" value={winner} onChange={e=>setWinner(e.target.value)}>
+            <option value="">â Winner â</option>
+            <option value={t1}>{flag(t1)} {t1}</option>
+            <option value={t2}>{flag(t2)} {t2}</option>
+          </select>
+          <button className="admin-save" disabled={!winner||!!saving[matchId]} onClick={save}>{saving[matchId]?'â¦':existing?'Update':'Save'}</button>
+        </div>
+        {existing&&<div className="admin-done">â {flag(existing)} {existing}</div>}
+      </div>
+    );
+  }
 
-  if (!timeLeft) return null;
-  return (
-    <div style={{ display:'flex', alignItems:'center', gap:7, padding:'8px 12px', background:'rgba(232,99,90,0.06)', border:'1px solid #e8635a22', borderRadius:9, marginBottom:14, fontSize:12 }}>
-      <span style={{ fontSize:15 }}>⏰</span>
-      <span style={{ color:'#e8635a', fontWeight:700 }}>Closes in {timeLeft}</span>
-      <span style={{ color:'#3a3a58' }}>· Pick your side before this debate locks!</span>
-    </div>
-  );
-}
-
-// ─── Bottom Nav ───────────────────────────────────────────────────────────────
-function BottomNav({ screen, onToday, onArchive, onShare, onLeaderboard, onBackoffice, isAdmin }) {
-  const tabs = [
-    ['🏠','Today','today',onToday],
-    ['📅','Archive','archive',onArchive],
-    ['🏆','Top','leaderboard',onLeaderboard],
-    ['📤','Share','share',onShare],
-  ];
-  if(isAdmin) tabs.push(['🛠️','Admin','backoffice',onBackoffice]);
-  return (
-    <div style={{ position:'fixed', bottom:0, left:0, right:0, background:'rgba(8,8,20,0.97)', borderTop:'1px solid #1a1a33', backdropFilter:'blur(12px)', padding:'10px 0 16px', display:'flex', justifyContent:'space-around', zIndex:50 }}>
-      {tabs.map(([ic,lab,key,fn])=>(
-        <button key={lab} onClick={fn} style={{ background:'none', border:'none', display:'flex', flexDirection:'column', alignItems:'center', gap:3, cursor:'pointer', color:screen===key?'#4fc4b8':'#33334a', fontSize:20, transition:'color 0.15s, transform 0.15s', transform:screen===key?'scale(1.1)':'scale(1)' }}>
-          <span>{ic}</span>
-          <span style={{ fontSize:10, fontWeight:700, letterSpacing:0.5 }}>{lab}</span>
-        </button>
+  return(
+    <div>
+      <h2 style={{fontSize:'1.15rem',fontWeight:900,margin:'0 0 4px',color:'#FFD700'}}>âï¸ Admin Panel</h2>
+      <p style={{fontSize:'0.8rem',color:'#7788aa',margin:'0 0 24px'}}>Enter match results to award bracket points and automatically settle all wagers for that match.</p>
+      <div className="admin-section">
+        <div className="admin-title">Group Stage â Select Advancers</div>
+        {WC_GROUPS.map(g=>{
+          const adv=Array.isArray(results[`group_${g.id}`])?results[`group_${g.id}`]:[];
+          return(
+            <div key={g.id} className="admin-card">
+              <div className="admin-lbl">Group {g.id}</div>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                {g.teams.map(t=>{
+                  const isAdv=adv.includes(t);
+                  return(
+                    <button key={t} className="group-adv-btn"
+                      style={{border:`1px solid ${isAdv?'#00D4AA':'rgba(255,255,255,0.1)'}`,background:isAdv?'rgba(0,212,170,0.1)':'transparent',color:isAdv?'#00D4AA':'#cce'}}
+                      onClick={()=>{
+                        let next=adv.includes(t)?adv.filter(x=>x!==t):adv.length<2?[...adv,t]:[adv[1],t];
+                        saveGroup(g.id,next);
+                      }}>{flag(t)} {t}</button>
+                  );
+                })}
+              </div>
+              {adv.length>0&&<div className="admin-done">â Advancing: {adv.join(', ')}</div>}
+            </div>
+          );
+        })}
+      </div>
+      {[['Round of 32',R32],['Round of 16',R16],['Quarterfinals',QF],['Semifinals',SF]].map(([lbl,rounds])=>(
+        <div key={lbl} className="admin-section">
+          <div className="admin-title">{lbl}</div>
+          {rounds.map(([mid,s1,s2])=><KoRow key={mid} matchId={mid} s1={s1} s2={s2}/>)}
+        </div>
       ))}
-    </div>
-  );
-}
-
-// ─── Auth Screen — 3-column: panels left/right, login card centered ───────────
-function AuthScreen() {
-  const [mode, setMode]       = useState('login');
-  const [name, setName]       = useState('');
-  const [email, setEmail]     = useState('');
-  const [pass, setPass]       = useState('');
-  const [err, setErr]         = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const inp = { width:'100%', padding:'13px 15px', background:'#0e0e22', border:'1px solid #1e1e3a', borderRadius:12, color:'#d0d0e8', fontSize:16, marginBottom:11, boxSizing:'border-box', outline:'none', fontFamily:'inherit' };
-
-  async function handleGoogle() {
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithOAuth({ provider:'google', options:{ redirectTo:window.location.origin } });
-    if (error) { setErr(error.message); setLoading(false); }
-  }
-  async function submit() {
-    setErr('');
-    if (!email||!pass) { setErr('All fields required'); return; }
-    if (mode==='signup'&&name.trim().length<2) { setErr('Enter a display name (min 2 chars)'); return; }
-    setLoading(true);
-    if (mode==='signup') {
-      const {error} = await supabase.auth.signUp({email,password:pass,options:{data:{full_name:name.trim()}}});
-      if (error) setErr(error.message); else setErr('Check your email to confirm, then sign in.');
-    } else {
-      const {error} = await supabase.auth.signInWithPassword({email,password:pass});
-      if (error) setErr(error.message);
-    }
-    setLoading(false);
-  }
-
-  return (
-    <div style={{ minHeight:'100vh', background:'#0a0a1a', display:'flex', flexDirection:'column', fontFamily:"'DM Sans',system-ui,sans-serif" }}>
-      <style>{GLOBAL_CSS}</style>
-
-      {/* Login card — centered at top */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'48px 20px 40px' }}>
-        <div style={{ width:'100%', maxWidth:380 }}>
-          {/* Logo */}
-          <div style={{ textAlign:'center', marginBottom:40 }}>
-            <div style={{ fontSize:10, fontWeight:800, letterSpacing:4, color:'#2a2a4a', marginBottom:18, textTransform:'uppercase' }}>Welcome to</div>
-            <PickASydeLogo size="large" />
-            <p style={{ color:'#5050a0', fontSize:14, marginTop:20, fontWeight:500 }}>One question. Two sides. You decide.</p>
-          </div>
-
-          {/* Google button */}
-          <button onClick={handleGoogle} disabled={loading} style={{ width:'100%', padding:'14px 16px', background:'#fff', border:'none', borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', gap:10, cursor:'pointer', fontSize:15, fontWeight:600, color:'#1a1a2e', marginBottom:16, boxShadow:'0 2px 16px rgba(0,0,0,.55)', opacity:loading?0.7:1 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-            {loading ? 'Connecting…' : 'Continue with Google'}
-          </button>
-
-          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
-            <div style={{ flex:1, height:1, background:'#1e1e3a' }}/><span style={{ color:'#252540', fontSize:12 }}>or</span><div style={{ flex:1, height:1, background:'#1e1e3a' }}/>
-          </div>
-
-          {mode==='signup' && <input placeholder="Display name" value={name} onChange={e=>setName(e.target.value)} style={inp}/>}
-          <input placeholder="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} style={inp}/>
-          <input placeholder="Password" type="password" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()} style={inp}/>
-          {err && <p style={{ color:err.includes('Check your email')?'#4fc4b8':'#e8635a', fontSize:12, margin:'0 0 10px' }}>{err}</p>}
-
-          <button onClick={submit} disabled={loading} style={{ width:'100%', padding:14, background:'linear-gradient(135deg,#4fc4b8,#38a89d)', border:'none', borderRadius:12, color:'#0a0a1a', fontWeight:900, fontSize:15, cursor:'pointer', opacity:loading?0.7:1 }}>
-            {loading ? 'Loading…' : mode==='login' ? 'Sign In' : 'Create Account'}
-          </button>
-          <p style={{ textAlign:'center', color:'#252540', fontSize:13, marginTop:16 }}>
-            {mode==='login' ? 'No account? ' : 'Have one? '}
-            <span onClick={()=>{setMode(m=>m==='login'?'signup':'login');setErr('');}} style={{ color:'#4fc4b8', cursor:'pointer', fontWeight:600 }}>
-              {mode==='login' ? 'Sign up free' : 'Sign in'}
-            </span>
-          </p>
-        </div>
-      </div>
-
-      {/* Panels below login — side by side */}
-      <div style={{ display:'flex', borderTop:'1px solid #12122a', background:'linear-gradient(180deg,#070712 0%,#0a0a1a 100%)' }}>
-        <div style={{ flex:1, borderRight:'1px solid #12122a' }}>
-          <AnimatedQuestions compact />
-        </div>
-        <div style={{ flex:1 }}>
-          <PlatformExplainer compact />
-        </div>
+      <div className="admin-section">
+        <div className="admin-title">ð Final</div>
+        <KoRow matchId="final" s1="sf_1" s2="sf_2"/>
       </div>
     </div>
   );
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
-export default function App() {
-  const [authUser, setAuthUser]         = useState(null);
-  const [userProfile, setUserProfile]   = useState(null);
-  const [authLoading, setAuthLoading]   = useState(true);
-  const [screen, setScreen]             = useState('today');
-  const [archivedDebate, setArchivedDebate] = useState(null);
-  const [todayDebate, setTodayDebate]   = useState(null);
-  const [yesterdayDebate, setYesterdayDebate] = useState(null);
-  const [debateLoading, setDebateLoading] = useState(true);
-  const [archive, setArchive]           = useState([]);
-  const [archiveLoaded, setArchiveLoaded] = useState(false);
-  const [userVoteMap, setUserVoteMap]   = useState({});
-  const [voteCounts, setVoteCounts]     = useState({countA:0,countB:0});
-  const [mindsChanged, setMindsChanged]  = useState(0);
-  const [comments, setComments]         = useState([]);
-  const [commentText, setCommentText]   = useState('');
-  const [modState, setModState]         = useState(null);
-  const [filterSide, setFilterSide]     = useState('all');
-  const [sortBy, setSortBy]             = useState('top');
-  const [showBox, setShowBox]           = useState(false);
-  const [showVoteButtons, setShowVoteButtons] = useState(false);
-  const [submitting, setSubmitting]     = useState(false);
-  const [userUpvotes, setUserUpvotes]   = useState(new Set());
-  const [aiLoading, setAiLoading]       = useState(null);
-  const [aiPersonas, setAiPersonas]     = useState([]);
-  const [upcomingDebate, setUpcomingDebate] = useState(null);
-  const [streakMilestone, setStreakMilestone] = useState(null); // shown once on milestone days
-  const [showShare, setShowShare]       = useState(false);
-  const [shareNudge, setShareNudge]     = useState(false);
-  const [voteFlash, setVoteFlash]       = useState(null);
-  const [sponsorIdx, setSponsorIdx]     = useState(0);
-  // Side switch state (max 2 switches per debate)
-  const [switchCount, setSwitchCount]   = useState(0);
-  const [switchTarget, setSwitchTarget] = useState(null); // { comment } — the comment that triggered switch
-  const [switchModal, setSwitchModal]   = useState(false);
-  const [switching, setSwitching]       = useState(false);
-  // Post-switch comment prompt
-  const [showNewSidePrompt, setShowNewSidePrompt] = useState(false);
-  const textRef = useRef(null);
-  const commentChannelRef = useRef(null);
-  const upvoteChannelRef  = useRef(null);
-
-  useEffect(() => { const t=setInterval(()=>setSponsorIdx(i=>(i+1)%SPONSORS.length),9000); return()=>clearInterval(t); },[]);
+/* ââ Main App âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ */
+export default function App(){
+  const[user,setUser]=useState(null);
+  const[admin,setAdmin]=useState(false);
+  const[tab,setTab]=useState('bracket');
+  const[showAuth,setShowAuth]=useState(false);
+  const[entry,setEntry]=useState(null);
+  const[results,setResults]=useState({});
+  const{toast,show}=useToast();
 
   useEffect(()=>{
-    supabase.auth.getSession().then(({data:{session}})=>{setAuthUser(session?.user??null);setAuthLoading(false);});
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>setAuthUser(session?.user??null));
+    const el=document.createElement('style');
+    el.textContent=CSS;
+    document.head.appendChild(el);
+    return()=>el.remove();
+  },[]);
+
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data:{session}})=>{if(session?.user)init(session.user);});
+    const{data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>{
+      if(session?.user)init(session.user);
+      else{setUser(null);setAdmin(false);setEntry(null);}
+    });
     return()=>subscription.unsubscribe();
   },[]);
-  useEffect(()=>{ if(authUser) getUserProfile().then(p=>setUserProfile(p)).catch(console.error); else setUserProfile(null); },[authUser]);
-  useEffect(()=>{ if(authUser) loadTodayDebate(); },[authUser]);
 
-  async function loadTodayDebate() {
-    setDebateLoading(true);
-    try {
-      const today = await getTodayDebate();
-      setTodayDebate(today);
-      if (today) {
-        const [voteRow,counts,comms,upvs,switched,minds] = await Promise.all([getUserVote(today.id),getVoteCounts(today.id),getCommentsWithStatus(today.id),authUser?getUserUpvotes(today.id):Promise.resolve(new Set()),authUser?hasUserSwitched(today.id):Promise.resolve(false),getMindsChangedCount(today.id)]);
-        if(voteRow) setUserVoteMap(m=>({...m,[today.id]:voteRow}));
-        setVoteCounts(counts);
-        setMindsChanged(minds + 47);
-        setComments(addSideLabels(comms,today));
-        setUserUpvotes(upvs);
-        setSwitchCount(switched||0);
-        if(commentChannelRef.current) commentChannelRef.current.unsubscribe();
-        commentChannelRef.current = subscribeToComments(today.id, nc=>{
-          setComments(prev=>prev.find(c=>c.id===nc.id)?prev:[addSideLabel(nc,today),...prev]);
-        });
-        if(upvoteChannelRef.current) upvoteChannelRef.current.unsubscribe();
-        upvoteChannelRef.current = subscribeToUpvotes(today.id,({commentId,newCount})=>{
-          setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:newCount}:c));
-        });
-      }
-      const arch = await getArchive();
-      if(arch.length>0) setYesterdayDebate(arch[0]);
-      // Load tomorrow's teaser
-      const upcoming = await getUpcomingDebate();
-      setUpcomingDebate(upcoming);
-    } catch(err){ console.error('loadTodayDebate error:',err); }
-    finally { setDebateLoading(false); }
-  }
-  useEffect(()=>()=>{commentChannelRef.current?.unsubscribe();upvoteChannelRef.current?.unsubscribe();},[]);
-
-  async function loadArchive() {
-    if(archiveLoaded){setScreen('archive');return;}
-    try {
-      const data=await getArchive(); setArchive(data); setArchiveLoaded(true);
-      await Promise.all(data.map(async d=>{ const v=await getUserVote(d.id); if(v) setUserVoteMap(m=>({...m,[d.id]:v})); }));
-    } catch(err){console.error('loadArchive error:',err);}
-    setScreen('archive');
-  }
-  async function loadArchivedDetail(debate) {
-    setArchivedDebate(debate); setScreen('archived-detail');
-    try { const [comms,upvs]=await Promise.all([getComments(debate.id),getUserUpvotes(debate.id)]); setComments(addSideLabels(comms,debate)); setUserUpvotes(upvs); }
-    catch(err){console.error('loadArchivedDetail error:',err);}
-  }
-  function goToToday() { setScreen('today'); if(todayDebate) getComments(todayDebate.id).then(comms=>setComments(addSideLabels(comms,todayDebate))); }
-  const addSideLabel  = (c,d) => ({...c,side_label:c.side==='A'?d.label_a:d.label_b});
-  const addSideLabels = (cs,d) => cs.map(c=>addSideLabel(c,d));
-
-  const debate    = screen==='archived-detail' ? archivedDebate : todayDebate;
-  const isLocked  = debate?.is_closed ?? false;
-  const userVoteRow = debate ? userVoteMap[debate.id] : null;
-  const userVote  = userVoteRow?.side ?? null;
-  const pctA      = calcPctA(debate, comments, userVote, screen==='today' ? voteCounts : null);
-
-  useEffect(()=>{ if(authUser&&isAdmin(authUser)) getAIPersonas().then(setAiPersonas).catch(console.error); },[authUser]);
-
-  async function handleVote(side) {
-    if(!authUser||!debate||isLocked) return;
-    const label = side==='A' ? debate.label_a : debate.label_b;
-    const color = side==='A' ? '#4fc4b8' : '#e8635a';
-    setUserVoteMap(m=>({...m,[debate.id]:{id:`optimistic_${Date.now()}`,side}}));
-    setShowVoteButtons(false); setModState(null);
-    setVoteFlash({side,label,color});
-    // Auto-open comment box after voting (post-vote prompt)
-    setShowBox(true);
-    setShowNewSidePrompt(false);
-    setTimeout(()=>textRef.current?.focus(),2800); // focus after flash animation
-    try {
-      const row = userVoteRow ? await changeVote(userVoteRow.id,side) : await castVote(debate.id,side);
-      if(!userVoteRow) {
-        getUserProfile().then(p=>{
-          setUserProfile(p);
-          // Check for streak milestones after first-vote profile refresh
-          const newStreak = p?.current_streak ?? 0;
-          if([2,3,7,14,30,60,100].includes(newStreak)) {
-            setStreakMilestone(newStreak);
-          }
-        }).catch(console.error);
-      }
-      setUserVoteMap(m=>({...m,[debate.id]:row}));
-      getVoteCounts(debate.id).then(setVoteCounts).catch(console.error);
-    } catch(err){console.error('handleVote error:',err);setUserVoteMap(m=>({...m,[debate.id]:userVoteRow??null}));}
+  async function init(u){
+    setUser(u);
+    const[ent,isAdm]=await Promise.all([db.loadEntry(u.id),db.isAdmin(u.id)]);
+    setAdmin(isAdm);
+    if(ent?.entry_data)setEntry(ent.entry_data);
   }
 
-  async function handleSubmit() {
-    if(!authUser||!userVote||submitting||isLocked||!debate) return;
-    const text = commentText.trim();
-    if(!text){setShowBox(false);setShowNewSidePrompt(false);return;}
-    setSubmitting(true); setModState({status:'checking'});
-    const result = await moderateComment(text,debate.question);
-    if(!result.allowed){setModState({status:'blocked',reason:result.reason});setSubmitting(false);return;}
-    setModState({status:'allowed'}); await new Promise(r=>setTimeout(r,600));
-    try {
-      const nc=await postComment(debate.id,userVote,text);
-      setComments(prev=>[addSideLabel(nc,debate),...prev]); setCommentText(''); setModState(null); setShowBox(false); setShowNewSidePrompt(false);
-    } catch(err){console.error('handleSubmit error:',err);setModState({status:'blocked',reason:'Failed to post. Please try again.'});}
-    finally{setSubmitting(false);}
+  async function loadResults(){setResults(await db.loadResults());}
+  useEffect(()=>{loadResults();},[]);
+
+  async function handleEntryChange(ne,pts){
+    setEntry(ne);
+    if(!user)return;
+    const{error}=await db.saveEntry(user.id,ne,pts);
+    if(error)show(error.message,'err');
   }
 
-  // Called when user taps "This changed my mind" on an opposite-side comment
-  async function handleChangedMyMind(comment) {
-    if(!debate||!userVote||switchCount>=2||isLocked) return;
-    // Log the signal immediately (analytics — every tap captured)
-    await logPersuasionSignal(debate.id, comment.id).catch(console.error);
-    setSwitchTarget(comment);
-    setSwitchModal(true);
-  }
+  const tabs=[
+    {id:'bracket',label:'â½ Bracket'},
+    {id:'wagers',label:'ð° Wagers'},
+    {id:'leaderboard',label:'ð Leaderboard'},
+    ...(admin?[{id:'admin',label:'âï¸ Admin'}]:[]),
+  ];
 
-  // Called when user confirms the switch in the modal
-  async function handleConfirmSwitch(reasonText) {
-    if(!debate||!userVote||!userVoteRow||switching) return;
-    const previousSide = userVote;
-    const newSide = previousSide==='A' ? 'B' : 'A';
-    setSwitching(true);
-    try {
-      const { voteRow } = await executeSideSwitch({
-        voteId: userVoteRow.id,
-        debateId: debate.id,
-        previousSide,
-        newSide,
-        persuadingCommentId: switchTarget?.id || null,
-        switchReasonText: reasonText || null,
-      });
-      // Update local state
-      setUserVoteMap(m=>({...m,[debate.id]:voteRow}));
-      setSwitchCount(c=>c+1);
-      // Mark the user's old comment as historical in local state
-      setComments(prev=>prev.map(c=>c.user_id===authUser.id&&c.side===previousSide&&c.comment_status==='active' ? {...c,comment_status:'historical'} : c));
-      // Update vote counts
-      getVoteCounts(debate.id).then(setVoteCounts).catch(console.error);
-      // Close modal, clear target
-      setSwitchModal(false); setSwitchTarget(null);
-      // Prompt for new side comment — pre-fill with the reason they just typed (reduces double-entry friction)
-      setCommentText(reasonText||'');
-      setModState(null);
-      setShowBox(true);
-      setShowNewSidePrompt(true);
-      setTimeout(()=>textRef.current?.focus(),200);
-    } catch(err){console.error('handleConfirmSwitch error:',err);}
-    finally{setSwitching(false);}
-  }
-
-  async function handleUpvote(commentId) {
-    if(!authUser||isLocked) return;
-    setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:c.upvote_count+1}:c));
-    setUserUpvotes(s=>new Set([...s,commentId]));
-    try { await upvoteComment(commentId); }
-    catch(err){ setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:c.upvote_count-1}:c)); setUserUpvotes(s=>{const n=new Set(s);n.delete(commentId);return n;}); }
-  }
-
-  async function handleRemoveUpvote(commentId) {
-    if(!authUser||isLocked) return;
-    setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:Math.max(0,c.upvote_count-1)}:c));
-    setUserUpvotes(s=>{const n=new Set(s);n.delete(commentId);return n;});
-    try { await removeUpvote(commentId); }
-    catch(err){ setComments(prev=>prev.map(c=>c.id===commentId?{...c,upvote_count:c.upvote_count+1}:c)); setUserUpvotes(s=>new Set([...s,commentId])); }
-  }
-
-  async function handleEdit(commentId, newText) {
-    const updated = await updateComment(commentId, newText);
-    setComments(prev=>prev.map(c=>c.id===commentId?{...c,text:updated.text}:c));
-  }
-  async function handleDelete(commentId) {
-    await deleteComment(commentId);
-    setComments(prev=>prev.filter(c=>c.id!==commentId));
-  }
-
-  async function handleAIGenerate(side) {
-    if(aiLoading||isLocked||!debate) return;
-    setAiLoading(side);
-    try {
-      const text=await generateAIComment(side,debate.label_a,debate.label_b,debate.question);
-      const persona=aiPersonas[Math.floor(Math.random()*aiPersonas.length)];
-      if(!persona){alert('No AI persona accounts found.');return;}
-      const nc=await seedAIComment(debate.id,side,text,persona.id);
-      setComments(prev=>[addSideLabel(nc,debate),...prev]);
-    } catch(err){console.error('handleAIGenerate error:',err);alert('AI seed failed: '+err.message);}
-    finally{setAiLoading(null);}
-  }
-
-  async function handleSignOut() { await supabase.auth.signOut(); setUserVoteMap({}); setUserProfile(null); }
-
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-
-  const userComment = comments.find(c=>c.user_id===authUser?.id);
-  const visible = comments.filter(c=>c.text&&(filterSide==='all'||c.side===filterSide)).sort((a,b)=>sortBy==='top'?b.upvote_count-a.upvote_count:new Date(b.created_at)-new Date(a.created_at));
-  const streak = userProfile?.current_streak??0;
-  const adminUser = authUser&&isAdmin(authUser);
-  const activeSponsor = debate?.sponsor_name ? {name:debate.sponsor_name,tagline:debate.sponsor_tagline,letter:debate.sponsor_logo_letter,color:debate.sponsor_color,url:'#'} : SPONSORS[sponsorIdx];
-
-  if(authLoading) return <div style={{minHeight:'100vh',background:'#0a0a1a',display:'flex',alignItems:'center',justifyContent:'center'}}><PickASydeLogo size="large"/></div>;
-  if(!authUser) return <AuthScreen/>;
-
-  return (
-    <>
-      <style>{GLOBAL_CSS}</style>
-
-      <div className="vs-layout" style={{ fontFamily:"'DM Sans',system-ui,sans-serif", color:'#d0d0e8' }}>
-
-        {/* Side columns removed — panels live below center */}
-
-        {/* CENTER ─────────────────────────────────────────────────────────── */}
-        <div className="vs-center">
-
-          {/* Header */}
-          <div style={{ background:'rgba(9,9,22,0.97)', borderBottom:'1px solid #1a1a33', padding:'12px 16px', display:'flex', alignItems:'center', justifyContent:'space-between', position:'sticky', top:0, zIndex:50, backdropFilter:'blur(12px)' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              {(screen==='archived-detail'||screen==='backoffice') && <button onClick={()=>setScreen(screen==='archived-detail'?'archive':'today')} style={{ background:'none',border:'none',color:'#4fc4b8',cursor:'pointer',fontSize:18,padding:0 }}>←</button>}
-              <PickASydeLogo size="small"/>
-              {streak>=2 && <span style={{ fontSize:11,fontWeight:800,color:'#f7c948',background:'rgba(247,201,72,.1)',border:'1px solid #f7c94828',borderRadius:6,padding:'2px 8px' }}>{streak}🔥</span>}
-            </div>
-            <div style={{ display:'flex', gap:7, alignItems:'center' }}>
-              {(screen==='archived-detail'||screen==='backoffice') && <button onClick={goToToday} style={{ background:'rgba(255,255,255,.04)',border:'1px solid #1e1e3a',borderRadius:7,padding:'4px 10px',fontSize:11,fontWeight:700,color:'#55557a',cursor:'pointer' }}>Today</button>}
-              <div style={{ position:'relative' }}>
-                <button onClick={()=>setShowProfileMenu(v=>!v)} title="Account" style={{ background:'none',border:'none',cursor:'pointer',padding:0 }}>
-                  <Av uid={authUser.id} name={userProfile?.display_name||authUser.email} size={30}/>
-                </button>
-                {showProfileMenu && (
-                  <>
-                    <div onClick={()=>setShowProfileMenu(false)} style={{ position:'fixed',inset:0,zIndex:99 }}/>
-                    <div style={{ position:'absolute',right:0,top:38,zIndex:100,background:'#12122a',border:'1px solid #1e1e3a',borderRadius:11,padding:'6px 0',minWidth:160,boxShadow:'0 8px 32px rgba(0,0,0,0.55)' }}>
-                      <div style={{ padding:'8px 14px 6px',borderBottom:'1px solid #1a1a30' }}>
-                        <div style={{ fontSize:12,fontWeight:700,color:'#d0d0e8' }}>{userProfile?.display_name||'Account'}</div>
-                        <div style={{ fontSize:11,color:'#3a3a58',marginTop:2 }}>{authUser.email}</div>
-                      </div>
-                      <button onClick={()=>{setShowProfileMenu(false);handleSignOut();}} style={{ width:'100%',textAlign:'left',background:'none',border:'none',cursor:'pointer',padding:'9px 14px',fontSize:13,color:'#e8635a',fontWeight:700 }}>
-                        Sign out
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* ── Backoffice (admin only) ── */}
-          {screen==='backoffice' && adminUser && <BackofficeScreen/>}
-
-          {/* ── Leaderboard ── */}
-          {screen==='leaderboard' && <LeaderboardScreen/>}
-
-          {/* ── Archive list ── */}
-          {screen==='archive' && (
-            <div style={{ maxWidth:580, margin:'0 auto', padding:'16px 14px 60px' }}>
-              <p style={{ fontSize:13, color:'#3a3a58', marginBottom:16 }}>Past debates are read-only. Votes & comments lock at midnight EST.</p>
-              {archive.map(d=>{
-                const myVote=userVoteMap[d.id]; const pct=d.final_pct_a??50;
-                return (
-                  <div key={d.id} onClick={()=>loadArchivedDetail(d)}
-                    style={{ background:'#0e0e22', border:'1px solid #191930', borderRadius:14, padding:'14px 16px', marginBottom:10, cursor:'pointer', transition:'border-color 0.15s' }}
-                    onMouseEnter={e=>e.currentTarget.style.borderColor='#2a2a45'}
-                    onMouseLeave={e=>e.currentTarget.style.borderColor='#191930'}
-                  >
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
-                      <div>
-                        <div style={{ fontSize:10, color:'#33334a', fontWeight:700, letterSpacing:0.8, marginBottom:4 }}>{formatDate(d.date)}</div>
-                        <div style={{ fontSize:15, fontWeight:700, color:'#d0d0e8', lineHeight:1.3 }}>{d.question}</div>
-                      </div>
-                      {myVote && <span style={{ fontSize:10, fontWeight:800, padding:'2px 8px', borderRadius:4, background:myVote.side==='A'?'rgba(79,196,184,.12)':'rgba(232,99,90,.12)', color:myVote.side==='A'?'#4fc4b8':'#e8635a', flexShrink:0, marginLeft:10 }}>I picked {myVote.side==='A'?d.label_a:d.label_b}</span>}
-                    </div>
-                    <VoteBar pctA={pct} lA={d.label_a} lB={d.label_b} animate={false}/>
-                    {d.sponsor_name && <div style={{ marginTop:10, fontSize:10, color:'#33334a', display:'flex', alignItems:'center', gap:5 }}><div style={{ width:14, height:14, borderRadius:3, background:d.sponsor_color||'#888', display:'flex', alignItems:'center', justifyContent:'center', fontSize:7, fontWeight:900, color:'#fff' }}>{d.sponsor_logo_letter}</div>Sponsored by {d.sponsor_name}</div>}
-                  </div>
-                );
-              })}
-              {archive.length===0 && <p style={{ textAlign:'center', color:'#33334a', padding:40, fontSize:13 }}>No archived debates yet. Come back tomorrow!</p>}
-            </div>
-          )}
-
-          {/* ── Today / Archived-detail ── */}
-          {screen!=='archive' && screen!=='backoffice' && screen!=='leaderboard' && (
-            <div style={{ maxWidth:680, margin:'0 auto', padding:'0 16px 60px', width:'100%' }}>
-
-              {debateLoading && screen==='today' && <div style={{ padding:48, textAlign:'center', color:'#33334a', fontSize:14 }}>Loading today's debate…</div>}
-
-              {!debateLoading && screen==='today' && !todayDebate && (
-                <div style={{ padding:48, textAlign:'center' }}>
-                  <div style={{ fontSize:30, marginBottom:14 }}>🕐</div>
-                  <div style={{ color:'#55557a', fontSize:15, fontWeight:600 }}>No debate scheduled for today.</div>
-                  <div style={{ color:'#33334a', fontSize:13, marginTop:6 }}>Check back soon, or browse the archive.</div>
-                </div>
-              )}
-
-              {debate && (<>
-
-                {/* Yesterday banner */}
-                {screen==='today' && yesterdayDebate && (
-                  <div style={{ marginTop:14, marginBottom:12, background:'#0e0e22', border:'1px solid #191930', borderRadius:12, padding:'10px 14px', display:'flex', alignItems:'center', gap:10 }}>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:9, fontWeight:800, letterSpacing:0.8, color:'#33334a', marginBottom:3 }}>YESTERDAY'S RESULT · {formatDate(yesterdayDebate.date)}</div>
-                      <div style={{ fontSize:13, color:'#7070a0', lineHeight:1.3 }}>{yesterdayDebate.question}</div>
-                    </div>
-                    <div style={{ textAlign:'right', flexShrink:0 }}>
-                      <div style={{ fontSize:20, fontWeight:900, color:'#4fc4b8' }}>{yesterdayDebate.final_pct_a??'?'}%</div>
-                      <div style={{ fontSize:9, color:'#4fc4b8', fontWeight:700 }}>{yesterdayDebate.label_a} won</div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Sponsor badge */}
-                {activeSponsor && (
-                  <a href={activeSponsor.url||'#'} target="_blank" rel="noopener noreferrer" className="sponsor-badge"
-                    style={{ display:'flex', alignItems:'center', gap:12, marginTop:screen==='today'?20:14, marginBottom:14, padding:'13px 16px', background:'linear-gradient(135deg,rgba(247,201,72,0.09),rgba(247,201,72,0.04))', border:'1px solid rgba(247,201,72,0.25)', borderRadius:12, textDecoration:'none', cursor:'pointer', position:'relative', overflow:'hidden' }}
-                  >
-                    <div style={{ position:'absolute', top:0, left:0, right:0, height:1, background:'linear-gradient(90deg,transparent,rgba(247,201,72,0.5),transparent)' }}/>
-                    <div style={{ width:38, height:38, borderRadius:9, flexShrink:0, background:activeSponsor.color||'#333', display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, fontWeight:900, color:'#fff', boxShadow:`0 0 14px ${activeSponsor.color||'#333'}66` }}>
-                      {activeSponsor.letter}
-                    </div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:9, color:'#f7c948', fontWeight:800, letterSpacing:1.2, textTransform:'uppercase', marginBottom:3 }}>✦ Sponsored by {activeSponsor.name}</div>
-                      <div style={{ fontSize:12, color:'#7a7a55', fontWeight:600 }}>{activeSponsor.tagline}</div>
-                    </div>
-                    <span style={{ fontSize:11, color:'#3a3a30', fontWeight:600, flexShrink:0 }}>↗</span>
-                  </a>
-                )}
-
-                {/* Locked banner */}
-                {isLocked && <div style={{ background:'rgba(232,99,90,.06)', border:'1px solid #e8635a22', borderRadius:10, padding:'9px 14px', marginBottom:14, fontSize:13, color:'#e8635a66', fontWeight:600, textAlign:'center' }}>🔒 This debate is closed · {formatDate(debate.date)} · Votes & comments locked</div>}
-
-                {/* ── Debate card — gradient border, prominent ── */}
-                <div className="debate-card-wrap">
-                  <div className="debate-card-inner">
-                    <div style={{ fontSize:10, fontWeight:800, letterSpacing:1.5, color:'#7070c0', marginBottom:12, textTransform:'uppercase' }}>
-                      {isLocked ? `Final Result · ${formatDate(debate.date)}` : `Today's Debate · ${formatDate(debate.date)}`}
-                    </div>
-                    <h1 style={{ margin:'0 0 22px', fontSize:'clamp(22px,5vw,30px)', fontWeight:900, lineHeight:1.25, color:'#f0f0ff', letterSpacing:'-.5px', fontStyle:'italic' }}>{debate.question}</h1>
-                    <VoteBar pctA={pctA} lA={debate.label_a} lB={debate.label_b} voteCounts={voteCounts} mindsChanged={mindsChanged}/>
-
-                    {/* Vote buttons */}
-                    {!isLocked && (!userVote||showVoteButtons) && (
-                      <div style={{ display:'flex', gap:10, marginTop:20 }}>
-                        {[['A','#4fc4b8',debate.label_a,'✨'],['B','#e8635a',debate.label_b,'🎲']].map(([s,col,lab,ic])=>(
-                          <button key={s} onClick={()=>handleVote(s)} className="vote-btn" style={{ flex:1, padding:'20px 12px', background:`linear-gradient(135deg,${col}22,${col}0a)`, border:`2px solid ${col}`, borderRadius:16, color:col, fontWeight:900, fontSize:'clamp(16px,4vw,20px)', cursor:'pointer', letterSpacing:0.5, fontFamily:"'DM Sans',system-ui,sans-serif", fontStyle:'normal', textShadow:`0 0 16px ${col}99`, boxShadow:`0 0 30px ${col}33`, fontVariantLigatures:'none' }}>
-                            {ic} {lab}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Voted state */}
-                    {!isLocked && userVote && !showVoteButtons && (
-                      <div style={{ marginTop:16, display:'flex', alignItems:'center', gap:9, flexWrap:'wrap' }}>
-                        <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:userVote==='A'?'rgba(79,196,184,.12)':'rgba(232,99,90,.12)', border:`1px solid ${userVote==='A'?'#4fc4b844':'#e8635a44'}`, borderRadius:10, padding:'7px 13px', fontSize:13, color:userVote==='A'?'#4fc4b8':'#e8635a', fontWeight:700 }}>
-                          ✓ {userVote==='A'?debate.label_a:debate.label_b}
-                          {switchCount<2 && <span onClick={()=>{setShowVoteButtons(true);setShowBox(false);setModState(null);}} style={{ color:'#7070b0', cursor:'pointer', fontSize:11, borderLeft:'1px solid #3a3a58', paddingLeft:8, marginLeft:3, fontWeight:600 }}>change</span>}
-                        </div>
-                        <button onClick={()=>setShowShare(true)} style={{ background:'rgba(247,201,72,.08)', border:'1px solid #f7c94830', borderRadius:10, padding:'7px 13px', fontSize:12, fontWeight:700, color:'#f7c948', cursor:'pointer' }}>📤 Share</button>
-                        {!showBox && !userComment && <button onClick={()=>setShowBox(true)} style={{ fontSize:12, color:'#33334a', background:'none', border:'1px solid #1a1a30', borderRadius:9, padding:'6px 12px', cursor:'pointer' }}>+ comment</button>}
-                      </div>
-                    )}
-
-                    {/* Locked + voted */}
-                    {isLocked && userVote && (
-                      <div style={{ marginTop:16, display:'flex', alignItems:'center', gap:9 }}>
-                        <div style={{ display:'inline-flex', alignItems:'center', gap:7, background:userVote==='A'?'rgba(79,196,184,.08)':'rgba(232,99,90,.08)', border:`1px solid ${userVote==='A'?'#4fc4b822':'#e8635a22'}`, borderRadius:10, padding:'6px 12px', fontSize:12, color:userVote==='A'?'#4fc4b8':'#e8635a', fontWeight:700 }}>
-                          You picked {userVote==='A'?debate.label_a:debate.label_b}
-                        </div>
-                        <button onClick={()=>setShowShare(true)} style={{ background:'rgba(247,201,72,.08)', border:'1px solid #f7c94828', borderRadius:9, padding:'6px 12px', fontSize:12, fontWeight:700, color:'#f7c948', cursor:'pointer' }}>📤 Share</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Comment box — post-vote prompt or post-switch prompt */}
-                {showBox && userVote && !isLocked && (
-                  <div style={{ background:'#0e0e24', border:`1px solid ${userVote==='A'?'#4fc4b825':'#e8635a25'}`, borderRadius:13, padding:16, marginBottom:14 }}>
-                    {showNewSidePrompt ? (
-                      <p style={{ margin:'0 0 10px', fontSize:13, color:'#8888c8', fontWeight:700 }}>
-                        You switched sides. Add a comment supporting your new position. <span style={{ color:'#33334a', fontWeight:400 }}>(optional)</span>
-                      </p>
-                    ) : (
-                      <p style={{ margin:'0 0 10px', fontSize:12, color:'#3e3e5a' }}>
-                        Why did you choose <span style={{ color:userVote==='A'?'#4fc4b8':'#e8635a', fontWeight:700 }}>{userVote==='A'?debate.label_a:debate.label_b}</span>? <span style={{ color:'#252540' }}>(optional — &gt;5 upvotes boosts your side ⚡)</span>
-                      </p>
-                    )}
-                    <textarea ref={textRef} placeholder={showNewSidePrompt ? `Make the case for ${userVote==='A'?debate.label_a:debate.label_b}…` : `Why ${userVote==='A'?debate.label_a:debate.label_b}? Make your case…`} value={commentText} onChange={e=>{setCommentText(stripHtml(e.target.value).slice(0,280));if(modState?.status==='blocked')setModState(null);}} rows={3}
-                      style={{ width:'100%', background:'#0a0a1a', border:'1px solid #1a1a30', borderRadius:9, color:'#d0d0e8', fontSize:16, padding:'11px 13px', resize:'none', boxSizing:'border-box', outline:'none', fontFamily:'inherit', lineHeight:1.55 }}/>
-                    <div style={{ textAlign:'right', fontSize:11, color:'#2e2e48', marginTop:3 }}>{commentText.length}/280</div>
-                    {modState && (
-                      <div style={{ background:modState.status==='checking'?'#1a1a30':modState.status==='blocked'?'rgba(232,99,90,.1)':'rgba(79,196,184,.08)', border:`1px solid ${modState.status==='checking'?'#2a2a48':modState.status==='blocked'?'#e8635a22':'#4fc4b822'}`, borderRadius:8, padding:'7px 11px', fontSize:12, color:modState.status==='checking'?'#55557a':modState.status==='blocked'?'#e8635a':'#4fc4b8', display:'flex', alignItems:'center', gap:6, marginTop:9, fontWeight:600 }}>
-                        <span>{modState.status==='checking'?'⏳':modState.status==='blocked'?'🚫':'✓'}</span>
-                        <span>{modState.status==='checking'?'Reviewing comment…':modState.status==='blocked'?(modState.reason||"Comment blocked — personal attacks aren't allowed"):'Approved'}</span>
-                      </div>
-                    )}
-                    <div style={{ display:'flex', gap:9, marginTop:11 }}>
-                      <button onClick={handleSubmit} disabled={submitting} style={{ flex:1, padding:11, background:userVote==='A'?'linear-gradient(135deg,#4fc4b8,#38a89d)':'linear-gradient(135deg,#e8635a,#d44a40)', border:'none', borderRadius:9, color:'#0a0a1a', fontWeight:900, fontSize:13, cursor:submitting?'default':'pointer', opacity:submitting?0.7:1 }}>
-                        {submitting ? 'Checking…' : 'Post Comment'}
-                      </button>
-                      <button onClick={()=>{setShowBox(false);setCommentText('');setModState(null);setShowNewSidePrompt(false);}} style={{ padding:'11px 14px', background:'transparent', border:'1px solid #1a1a30', borderRadius:9, color:'#3a3a58', cursor:'pointer', fontSize:13 }}>Skip</button>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── Retention: "closes in X hours" urgency — shown when user hasn't voted ── */}
-                {!isLocked && !userVote && screen==='today' && <ClosingCountdown/>}
-
-                {/* ── Retention: tomorrow's debate teaser — shown after voting ── */}
-                {!isLocked && userVote && screen==='today' && upcomingDebate && (
-                  <div style={{ background:'linear-gradient(135deg,rgba(79,196,184,0.06),rgba(79,196,184,0.02))', border:'1px solid #4fc4b820', borderRadius:12, padding:'13px 16px', marginBottom:14 }}>
-                    <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'#4fc4b8', marginBottom:6, textTransform:'uppercase' }}>🔮 Coming Tomorrow · {formatDate(upcomingDebate.date)}</div>
-                    <div style={{ fontSize:14, fontWeight:700, color:'#a0a0cc', lineHeight:1.35, marginBottom:8 }}>{upcomingDebate.question}</div>
-                    <div style={{ fontSize:11, color:'#33334a' }}>
-                      <span style={{ color:'#4fc4b8', fontWeight:700 }}>{upcomingDebate.label_a}</span>
-                      {' vs '}
-                      <span style={{ color:'#e8635a', fontWeight:700 }}>{upcomingDebate.label_b}</span>
-                      {' · Debate drops at 9:30 AM EST'}
-                    </div>
-                  </div>
-                )}
-
-                {/* AI seed — admin only */}
-                {!isLocked && adminUser && (
-                  <div style={{ display:'flex', gap:7, marginBottom:14 }}>
-                    {[['A','#4fc4b8',debate.label_a],['B','#e8635a',debate.label_b]].map(([s,col,lab])=>(
-                      <button key={s} onClick={()=>handleAIGenerate(s)} disabled={!!aiLoading} style={{ flex:1, padding:6, background:`${col}07`, border:`1px dashed ${col}44`, borderRadius:7, color:col, fontSize:10, fontWeight:700, cursor:aiLoading?'default':'pointer', letterSpacing:0.4, opacity:aiLoading===s?0.6:1 }}>
-                        {aiLoading===s?'⏳ generating…':`🤖 Seed: ${lab}`}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Filter bar */}
-                <div style={{ display:'flex', gap:6, marginBottom:14, alignItems:'center' }}>
-                  {[['all','All'],['A',debate.label_a],['B',debate.label_b]].map(([v,l])=>(
-                    <button key={v} onClick={()=>setFilterSide(v)} style={{ padding:'5px 13px', background:filterSide===v?(v==='A'?'#4fc4b8':v==='B'?'#e8635a':'#4fc4b8'):'rgba(255,255,255,.03)', border:`1px solid ${filterSide===v?'transparent':'#1a1a30'}`, borderRadius:20, color:filterSide===v?'#0a0a1a':'#3e3e5a', fontSize:12, fontWeight:filterSide===v?800:500, cursor:'pointer' }}>{l}</button>
-                  ))}
-                  <div style={{ marginLeft:'auto', display:'flex', gap:4 }}>
-                    {[['top','Top'],['new','New']].map(([v,l])=>(
-                      <button key={v} onClick={()=>setSortBy(v)} style={{ padding:'5px 11px', background:sortBy===v?'#1a1a30':'transparent', border:'1px solid #1a1a30', borderRadius:20, color:sortBy===v?'#d0d0e8':'#2e2e48', fontSize:11, cursor:'pointer' }}>{l}</button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Comments */}
-                {visible.length===0
-                  ? <p style={{ textAlign:'center', color:'#252540', padding:36, fontSize:13 }}>No comments yet. {isLocked?'Debate is closed.':'Pick a side and start the conversation.'}</p>
-                  : visible.map(c=><CommentCard key={c.id} c={c} currentUserId={authUser.id} hasUpvoted={userUpvotes.has(c.id)} onUpvote={handleUpvote} onRemoveUpvote={handleRemoveUpvote} locked={isLocked} onEdit={handleEdit} onDelete={handleDelete} userVote={userVote} canSwitchSides={!!userVote&&switchCount<2&&!isLocked} onChangedMyMind={handleChangedMyMind}/>)
-                }
-              </>)}
-            </div>
-          )}
-
-          <BottomNav screen={screen} onToday={goToToday} onArchive={loadArchive} onLeaderboard={()=>setScreen('leaderboard')} isAdmin={!!adminUser} onBackoffice={()=>setScreen('backoffice')} onShare={()=>{
-            if(!userVote){ setShareNudge(true); setTimeout(()=>setShareNudge(false),2800); }
-            else setShowShare(true);
-          }}/>
+  return(
+    <div className="wc-app">
+      <header className="wc-header">
+        <div>
+          <div className="wc-logo">PickASyde</div>
+          <span className="wc-logo-sub">FIFA World Cup 2026</span>
         </div>
-
-        {/* Explainer below center */}
-        <div className="vs-explainer">
-          <PlatformExplainer compact/>
-        </div>
-
-      </div>
-
-      {/* Vote flash */}
-      {voteFlash && <VoteFlashOverlay key={`${voteFlash.side}-${Date.now()}`} side={voteFlash.side} label={voteFlash.label} color={voteFlash.color} onDone={()=>setVoteFlash(null)}/>}
-
-      {/* Vote-first nudge toast */}
-      {shareNudge && (
-        <div style={{ position:'fixed', bottom:80, left:'50%', transform:'translateX(-50%)', background:'#1a1a33', border:'1px solid #4fc4b844', borderRadius:12, padding:'12px 20px', fontSize:13, fontWeight:700, color:'#4fc4b8', zIndex:200, whiteSpace:'nowrap', boxShadow:'0 4px 24px rgba(0,0,0,0.5)' }}>
-          Pick a side first to share your take! 🗳️
-        </div>
-      )}
-      {/* Share modal */}
-      {showShare && debate && userVote && <ShareModal debate={debate} vote={userVote} commentText={userComment?.text??null} pct={userVote==='A'?pctA:100-pctA} streak={streak} onClose={()=>setShowShare(false)}/>}
-
-      {/* Streak milestone celebration */}
-      {streakMilestone && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:300, padding:20 }} onClick={()=>setStreakMilestone(null)}>
-          <div style={{ background:'#0e0e22', border:'1px solid #2a2a44', borderRadius:20, padding:'36px 28px', maxWidth:340, width:'100%', textAlign:'center', position:'relative' }} onClick={e=>e.stopPropagation()}>
-            <div style={{ fontSize:56, marginBottom:8 }}>{streakMilestone>=30?'🏆':streakMilestone>=7?'🔥':'⚡'}</div>
-            <div style={{ fontSize:28, fontWeight:900, color:'#f7c948', marginBottom:6, letterSpacing:-0.5 }}>{streakMilestone}-Day Streak!</div>
-            <div style={{ fontSize:14, color:'#7070a0', lineHeight:1.6, marginBottom:24 }}>
-              {streakMilestone>=30 ? "You're a PickASyde legend. 30 days straight — that's dedication." :
-               streakMilestone>=7  ? `A full week of hot takes. Your streak is ${streakMilestone} days strong.` :
-                                     `${streakMilestone} days in a row. You're on a roll — keep it going!`}
+        {user
+          ?<div className="wc-user-pill">
+              <div className="wc-avatar">{user.email?.[0]?.toUpperCase()}</div>
+              <button className="wc-auth-btn" onClick={()=>supabase.auth.signOut()}>Sign Out</button>
             </div>
-            <button onClick={()=>{setStreakMilestone(null);setShowShare(true);}} style={{ width:'100%', padding:'13px 0', background:'linear-gradient(135deg,#f7c948,#e8b830)', border:'none', borderRadius:11, color:'#0a0a1a', fontWeight:900, fontSize:14, cursor:'pointer', marginBottom:10 }}>
-              📤 Share Your Streak
-            </button>
-            <button onClick={()=>setStreakMilestone(null)} style={{ width:'100%', padding:'11px 0', background:'transparent', border:'1px solid #1e1e38', borderRadius:11, color:'#4a4a6a', fontSize:13, cursor:'pointer' }}>
-              Keep it going →
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Side switch confirmation modal */}
-      {switchModal && debate && userVote && (
-        <SwitchConfirmModal
-          debate={debate}
-          previousSide={userVote}
-          newSide={userVote==='A'?'B':'A'}
-          persuadingComment={switchTarget}
-          onConfirm={handleConfirmSwitch}
-          onCancel={()=>{setSwitchModal(false);setSwitchTarget(null);}}
-          switching={switching}
-        />
-      )}
-    </>
+          :<button className="wc-auth-btn" onClick={()=>setShowAuth(true)}>Sign In / Join</button>
+        }
+      </header>
+      <nav className="wc-nav">
+        {tabs.map(t=>(
+          <button key={t.id} className={`wc-tab ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.label}</button>
+        ))}
+      </nav>
+      <main className="wc-page">
+        {tab==='bracket'&&<BracketTab user={user} entry={entry} onEntryChange={handleEntryChange} results={results} showToast={show}/>}
+        {tab==='wagers'&&<WagersTab user={user} entry={entry} showToast={show}/>}
+        {tab==='leaderboard'&&<LeaderboardTab user={user}/>}
+        {tab==='admin'&&admin&&<AdminTab results={results} onRefresh={loadResults} showToast={show} entry={entry}/>}
+      </main>
+      {showAuth&&<AuthModal onClose={()=>setShowAuth(false)} onAuth={u=>{setShowAuth(false);init(u);}}/>}
+      {toast&&<div className={`toast ${toast.type==='err'?'err':''}`}>{toast.msg}</div>}
+    </div>
   );
 }
